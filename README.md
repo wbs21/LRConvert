@@ -1,9 +1,9 @@
 # LRConvert
 
 #### 介绍
-{**以下是 LRConvert 软件说明**
+**以下是 LRConvert 软件说明**
 Little Rubbit Convert 小兔子转换器 (Little Rubbit Convert) 是为了方便使用FFMPEG而设计的一个简易的FFMPEG图形界面（GUI）。
-}
+
 
 #### 软件说明
 Little Rubbit Convert的所有功能完全依赖于FFMPEG。因此您的系统中如果没有安装过FFMPEG,
