@@ -2,8 +2,9 @@
 
 #### 软件下载地址
 
-链接：https://pan.baidu.com/s/1WHurbxi9D7IU6j6z0M1cAQ 
-提取码：qaom 
+链接：https://pan.baidu.com/s/1VdofaUR7VJBYKAWPI-f5jA 
+提取码：kwcf 
+
 
 
 #### 介绍
