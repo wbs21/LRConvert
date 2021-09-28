@@ -13,7 +13,7 @@ Little Rabbit Convert 小兔子转换器 (Little Rabbit Convert) 是为了方便
 
 
 #### 软件说明
-Little Rubbit Convert的所有功能完全依赖于FFMPEG。因此您的系统中如果没有安装过FFMPEG,
+Little Rabbit Convert的所有功能完全依赖于FFMPEG。因此您的系统中如果没有安装过FFMPEG,
 那么请将本压缩包中的ffmpeg.exe文件，拷贝到Little Rabbit Convert的同一文件夹下，本工具才能正常使用。
 
 
