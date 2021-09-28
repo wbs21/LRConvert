@@ -1,39 +1,30 @@
 # LRConvert
 
 #### 介绍
-{**以下是 Gitee 平台说明，您可以替换此简介**
-Gitee 是 OSCHINA 推出的基于 Git 的代码托管平台（同时支持 SVN）。专为开发者提供稳定、高效、安全的云端软件开发协作平台
-无论是个人、团队、或是企业，都能够用 Gitee 实现代码托管、项目管理、协作开发。企业项目请看 [https://gitee.com/enterprises](https://gitee.com/enterprises)}
+{**以下是 LRConvert 软件说明**
+Little Rubbit Convert 小兔子转换器 (Little Rubbit Convert) 是为了方便使用FFMPEG而设计的一个简易的FFMPEG图形界面（GUI）。
+}
 
-#### 软件架构
-软件架构说明
+#### 软件说明
+Little Rubbit Convert的所有功能完全依赖于FFMPEG。因此您的系统中如果没有安装过FFMPEG,
+那么请将本压缩包中的ffmpeg.exe文件，拷贝到Little Rubbit Convert的同一文件夹下，本工具才能正常使用。
 
 
-#### 安装教程
+#### 安装说明
 
-1.  xxxx
-2.  xxxx
-3.  xxxx
+1.  本软件为绿色免安装版。
+2.  将压缩包解压到本地，打开LRConvert.exe文件即可使用。
+
 
 #### 使用说明
 
-1.  xxxx
-2.  xxxx
-3.  xxxx
-
-#### 参与贡献
-
-1.  Fork 本仓库
-2.  新建 Feat_xxx 分支
-3.  提交代码
-4.  新建 Pull Request
+1.  Little Rubbit Convert的前四项功能，因为不重新编码，所以速度极快，而且不会带来质量损失。
 
 
-#### 特技
+#### 测试说明
 
-1.  使用 Readme\_XXX.md 来支持不同的语言，例如 Readme\_en.md, Readme\_zh.md
-2.  Gitee 官方博客 [blog.gitee.com](https://blog.gitee.com)
-3.  你可以 [https://gitee.com/explore](https://gitee.com/explore) 这个地址来了解 Gitee 上的优秀开源项目
-4.  [GVP](https://gitee.com/gvp) 全称是 Gitee 最有价值开源项目，是综合评定出的优秀开源项目
-5.  Gitee 官方提供的使用手册 [https://gitee.com/help](https://gitee.com/help)
-6.  Gitee 封面人物是一档用来展示 Gitee 会员风采的栏目 [https://gitee.com/gitee-stars/](https://gitee.com/gitee-stars/)
+Little Rubbit Convert还处于最初开发版本，无可避免有很多的bug和功能缺陷，
+如果您有任何问题及建议，非常期待您的反馈。
+您可以点击上方的版本信息链接，在页面下方进行留言。
+
+
