@@ -1,5 +1,11 @@
 # LRConvert
 
+#### 软件下载地址
+
+链接：https://pan.baidu.com/s/1WHurbxi9D7IU6j6z0M1cAQ 
+提取码：qaom 
+
+
 #### 介绍
 **以下是 LRConvert 软件说明** 
 
