@@ -19,7 +19,11 @@ windows版本：
 链接：https://pan.baidu.com/s/1CEZ-H6NTqYjAOf_CcnnsVA 
 提取码：ubc5 
 
+Mac版本：
+链接：https://pan.baidu.com/s/1YnLjV_b1f9-xKASuBm65Jg 
+提取码：yc03 
 
+注意： Mac版本必须首先在系统中安装好ffmpeg才能使用。Mac系统安装ffmpeg较为复杂，具体请参考“Mac系统安装ffmpeg说明.md”文中的步骤。
 
 
 #### 介绍
