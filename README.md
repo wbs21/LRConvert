@@ -1,5 +1,18 @@
 # LRConvert
 
+
+#### 更新说明
+
+v 1.2.0:
+    1，修正了一些软件BUG;
+    2, 增加了MAC版本。
+
+v 1.1.0:
+    1，修正了一些软件BUG;
+
+v 1.0.0:
+    第一个测试版本
+
 #### 软件下载地址
 
 链接：https://pan.baidu.com/s/1VdofaUR7VJBYKAWPI-f5jA 
