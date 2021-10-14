@@ -15,8 +15,10 @@ v 1.0.0:
 
 #### 软件下载地址
 
-链接：https://pan.baidu.com/s/1VdofaUR7VJBYKAWPI-f5jA 
-提取码：kwcf 
+windows版本：
+链接：https://pan.baidu.com/s/1CEZ-H6NTqYjAOf_CcnnsVA 
+提取码：ubc5 
+
 
 
 
