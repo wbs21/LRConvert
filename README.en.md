@@ -1,36 +1,53 @@
 # LRConvert
 
-#### Description
-{**When you're done, you can delete the content in this README and update the file with details for others getting started with your repository**}
 
-#### Software Architecture
-Software architecture description
+#### 更新说明
+v 1.3.0
+    增加线程控制，避免批量压缩时，因文件数量过多引起的进程崩溃。
 
-#### Installation
+v 1.2.0:
+    1，修正了一些软件BUG;
+    2, 增加了MAC版本。
 
-1.  xxxx
-2.  xxxx
-3.  xxxx
+v 1.1.0:
+    1，修正了一些软件BUG;
 
-#### Instructions
+v 1.0.0:
+    第一个测试版本
 
-1.  xxxx
-2.  xxxx
-3.  xxxx
+#### 软件下载地址
 
-#### Contribution
-
-1.  Fork the repository
-2.  Create Feat_xxx branch
-3.  Commit your code
-4.  Create Pull Request
+链接：https://pan.baidu.com/s/1dGx04xZ-LoiZwMHB3KheOQ 
+提取码：sxmf 
 
 
-#### Gitee Feature
+注意： Mac版本必须首先在系统中安装好ffmpeg才能使用。Mac系统安装ffmpeg较为复杂，具体请参考“Mac系统安装ffmpeg说明.md”文中的步骤。
 
-1.  You can use Readme\_XXX.md to support different languages, such as Readme\_en.md, Readme\_zh.md
-2.  Gitee blog [blog.gitee.com](https://blog.gitee.com)
-3.  Explore open source project [https://gitee.com/explore](https://gitee.com/explore)
-4.  The most valuable open source project [GVP](https://gitee.com/gvp)
-5.  The manual of Gitee [https://gitee.com/help](https://gitee.com/help)
-6.  The most popular members  [https://gitee.com/gitee-stars/](https://gitee.com/gitee-stars/)
+
+#### 介绍
+**以下是 LRConvert 软件说明** 
+
+Little Rabbit Convert 小兔子转换器 (Little Rabbit Convert) 是为了方便使用FFMPEG而设计的一个简易的FFMPEG图形界面（GUI）。
+
+
+#### 软件说明
+Little Rabbit Convert的所有功能完全依赖于FFMPEG。因此您的系统中如果没有安装过FFMPEG,
+那么请将本压缩包中的ffmpeg.exe文件，拷贝到Little Rabbit Convert的同一文件夹下，本工具才能正常使用。
+
+
+#### 安装说明
+
+1.  本软件为绿色免安装版。
+2.  将压缩包解压到本地，打开LRConvert.exe文件即可使用。
+
+
+#### 使用说明
+
+1.  Little Rabbit Convert的前四项功能，因为不重新编码，所以速度极快，而且不会带来质量损失。
+
+
+#### 测试说明
+
+Little Rabbit Convert还处于最初开发版本，无可避免有很多的bug和功能缺陷，
+如果您有任何问题及建议，非常期待您的反馈。
+您可以点击上方的版本信息链接，在页面下方进行留言。

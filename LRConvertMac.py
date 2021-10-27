@@ -1,26 +1,38 @@
 import tkinter as tk
 from tkinter import messagebox, filedialog, OptionMenu, Radiobutton, Scale, ttk
-import threading
-import subprocess
 import webbrowser
+from concurrent.futures import ThreadPoolExecutor
+import subprocess
+import sys
+import os
+import re
+import threading
+import time
+import requests
 import base64
 import weixinpng
-import sys, os, re, time
-import requests
 
 cmds=[]
 files=[]
 selfName=''
 
 class ffmpegClass():
-    def __init__(self, cmd):
+    def __init__(self, cmd, app, file):
         self.cmd = cmd
+        self.app = app
+        self.file = file
         self.process = None
 
-    def ffmpegRun(self, app, filename):
-        self.process = subprocess.Popen(self.cmd, shell=True, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, encoding="utf-8", text=True)
-        app.sysInfo.config(state='normal')
-        app.sysInfo.insert('end', "开始对 "+ filename +" 进行转码 \n")
+    def ffmpegRun(self):
+        self.process = subprocess.Popen(self.cmd,
+                                        shell=True,
+                                        stdin=subprocess.PIPE,
+                                        stdout=subprocess.PIPE,
+                                        stderr=subprocess.STDOUT,
+                                        encoding="utf-8",
+                                        text=True)
+        self.app.sysInfo.config(state='normal')
+        self.app.sysInfo.insert('end', "开始对 " + self.file + " 进行转码 \n")
         duration = "N/A"
         for line in self.process.stdout:
             duration_res = re.search(r'\sDuration: (?P<duration>\S+)', line)
@@ -32,22 +44,30 @@ class ffmpegClass():
                 elapsed_time = result.groupdict()['time']
                 if "-" in elapsed_time:
                     elapsed_time = elapsed_time[1:]
-                # 此处可能会出现进度超过100%，未对数值进行纠正
-                progress = (self.get_seconds(elapsed_time) / self.get_seconds(duration)) * 100
-                app.sysInfo.insert('end', "耗时: " + elapsed_time + "\n")
-                app.sysInfo.insert('end', "正在转码 " + filename +" ...... 进度:%3.2f" % progress + "%" + "\n")
-                app.sysInfo.see(tk.END)
+                progress = (self.get_seconds(elapsed_time) /
+                            self.get_seconds(duration)) * 100
+                self.app.sysInfo.insert('end', "耗时: " + elapsed_time + "\n")
+                self.app.sysInfo.insert(
+                    'end', "正在转码 " + self.file +
+                    " ...... 进度:%3.2f" % progress + "%" + "\n")
+                self.app.sysInfo.see(tk.END)
             elif result and re.search(r'frame.*', str(line)):
-                app.sysInfo.insert('end', "正在转码 " + re.search(r'frame.*', str(line)).group() + "\n")
-                app.sysInfo.see(tk.END)
+                self.app.sysInfo.insert(
+                    'end',
+                    "正在转码 " + re.search(r'frame.*', str(line)).group() + "\n")
+                self.app.sysInfo.see(tk.END)
         self.process.communicate()
         if self.process.poll() == 0:
-            app.sysInfo.insert('end', filename + " success! 转码完成！ " + "\n")
-            app.sysInfo.see(tk.END)
+            self.app.sysInfo.insert('end',
+                                    self.file + " success! 转码完成！ " + "\n")
+            self.app.sysInfo.see(tk.END)
+            self.app.sysInfo.config(state='disable')
+            return False
         else:
-            app.sysInfo.insert('end', filename + " error! 转码出错！ " + "\n")
-            app.sysInfo.see(tk.END)
-        app.sysInfo.config(state='disable')
+            self.app.sysInfo.insert('end', self.file + " error! 转码出错！ " + "\n")
+            self.app.sysInfo.see(tk.END)
+            self.app.sysInfo.config(state='disable')
+            return True
 
     def get_seconds(self, time):
         h = int(time[0:2])
@@ -56,10 +76,6 @@ class ffmpegClass():
         ms = int(time[9:12])
         ts = (h * 60 * 60) + (m * 60) + s + (ms / 1000)
         return ts
-
-    def ffmpegThread(self, app, filename):
-        self.thread = threading.Thread(target=self.ffmpegRun, args=(app, filename), daemon=True)
-        self.thread.start()
 
     def ffmpegStop(self):
         try:
@@ -72,16 +88,30 @@ class ffmpegClass():
 def runcode(self):
     global selfName
     selfName = self
+    self.names = locals()
+    pool = ThreadPoolExecutor(max_workers=2)
+    task_list = []
     for i in range(len(cmds)):
         cmd = cmds[i]
-        file= files[i]
-        exec(f'self.n{i}=ffmpegClass(cmd)')
-        exec(f'self.n{i}.ffmpegThread(self, file)')
+        file = files[i]
+        self.names[str(i)] = ffmpegClass(cmd, self, file)
+        task = pool.submit(self.names[str(i)].ffmpegRun)
+        task_list.append(task)
+
+        def get_result(future):
+            try:
+                if future.result():
+                    pool.shutdown(wait=False, cancel_futures=True)
+            except:
+                pass
+        task.add_done_callback(get_result)
+
+
 
 def stopcode(self):
     for i in range(len(cmds)):
         try:
-            exec(f'self.n{i}.ffmpegStop()')
+            self.names[str(i)].ffmpegStop()
         except:
             pass
 
@@ -276,9 +306,9 @@ class Frame1(ttk.Frame):
         tk.Button(master, text='开始截取', width=8, height=1, command=lambda: cutFile(self)).place(x=620, y=35)
         tk.Button(master, text='停止编码', width=8, height=1, command=lambda: stopcode(self)).place(x=620, y=75)
         tk.Label(master, text='时间格式既支持hh:mm:ss 时：分：秒 的格式，也支持 00：00：00.000 小数点后3位为毫秒的格式。', font=(
-            'Arial',14), bg='#eeeeee', height=2).place(x=10, y=150)
+            'Arial',14), background=bgcolor, height=2).place(x=10, y=150)
         self.sysText = tk.Label(master, text="转码进度信息：", font=('Arial'), background=bgcolor, height=2)
-        self.sysInfo = tk.Text(master, background='#fafafa', height=22)
+        self.sysInfo = tk.Text(master, background=bgcolor, height=22)
         self.sysText.place(x=30, y=225)
         self.sysInfo.place(x=140, y=225)
         self.sysInfo.config(state='disable')
@@ -499,8 +529,8 @@ def main():
     root.mainloop()
 
 if __name__ == '__main__':
-    bgcolor='#eeeeee'
-    version = 'version: 1.2.0'
+    bgcolor='#383838'
+    version = 'version: 1.3.0'
     version_URL = 'https://gitee.com/wbs21/lrconvert/blob/master/version.md'
     home_URL = 'https://gitee.com/wbs21/lrconvert/tree/master'
     main()

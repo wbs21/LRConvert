@@ -2,6 +2,8 @@
 
 
 #### 更新说明
+v 1.3.0
+    增加线程控制，避免批量压缩时，因文件数量过多引起的进程崩溃。
 
 v 1.2.0:
     1，修正了一些软件BUG;
@@ -15,13 +17,9 @@ v 1.0.0:
 
 #### 软件下载地址
 
-windows版本：
-链接：https://pan.baidu.com/s/1CEZ-H6NTqYjAOf_CcnnsVA 
-提取码：ubc5 
+链接：https://pan.baidu.com/s/1dGx04xZ-LoiZwMHB3KheOQ 
+提取码：sxmf 
 
-Mac版本：
-链接：https://pan.baidu.com/s/1YnLjV_b1f9-xKASuBm65Jg 
-提取码：yc03 
 
 注意： Mac版本必须首先在系统中安装好ffmpeg才能使用。Mac系统安装ffmpeg较为复杂，具体请参考“Mac系统安装ffmpeg说明.md”文中的步骤。
 

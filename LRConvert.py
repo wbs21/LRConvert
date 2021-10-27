@@ -1,6 +1,7 @@
 import tkinter as tk
 from tkinter import messagebox, filedialog, OptionMenu, Radiobutton, Scale, ttk
 import webbrowser
+from concurrent.futures import ThreadPoolExecutor
 import subprocess
 import sys
 import os
@@ -11,19 +12,28 @@ import requests
 import base64
 import weixinpng
 
-cmds=[]
-files=[]
-selfName=''
+cmds = []
+files = []
+selfName = ''
+
 
 class ffmpegClass():
-    def __init__(self, cmd):
+    def __init__(self, cmd, app, file):
         self.cmd = cmd
+        self.app = app
+        self.file = file
         self.process = None
 
-    def ffmpegRun(self, app, filename):
-        self.process = subprocess.Popen(self.cmd, shell=True, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, encoding="utf-8", text=True)
-        app.sysInfo.config(state='normal')
-        app.sysInfo.insert('end', "开始对 "+ filename +" 进行转码 \n")
+    def ffmpegRun(self):
+        self.process = subprocess.Popen(self.cmd,
+                                        shell=True,
+                                        stdin=subprocess.PIPE,
+                                        stdout=subprocess.PIPE,
+                                        stderr=subprocess.STDOUT,
+                                        encoding="utf-8",
+                                        text=True)
+        self.app.sysInfo.config(state='normal')
+        self.app.sysInfo.insert('end', "开始对 " + self.file + " 进行转码 \n")
         duration = "N/A"
         for line in self.process.stdout:
             duration_res = re.search(r'\sDuration: (?P<duration>\S+)', line)
@@ -35,22 +45,31 @@ class ffmpegClass():
                 elapsed_time = result.groupdict()['time']
                 if "-" in elapsed_time:
                     elapsed_time = elapsed_time[1:]
-                # 此处可能会出现进度超过100%，未对数值进行纠正
-                progress = (self.get_seconds(elapsed_time) / self.get_seconds(duration)) * 100
-                app.sysInfo.insert('end', "耗时: " + elapsed_time + "\n")
-                app.sysInfo.insert('end', "正在转码 " + filename +" ...... 进度:%3.2f" % progress + "%" + "\n")
-                app.sysInfo.see(tk.END)
+                progress = (self.get_seconds(elapsed_time) /
+                            self.get_seconds(duration)) * 100
+                self.app.sysInfo.insert('end', "耗时: " + elapsed_time + "\n")
+                self.app.sysInfo.insert(
+                    'end', "正在转码 " + self.file +
+                    " ...... 进度:%3.2f" % progress + "%" + "\n")
+                self.app.sysInfo.see(tk.END)
             elif result and re.search(r'frame.*', str(line)):
-                app.sysInfo.insert('end', "正在转码 " + re.search(r'frame.*', str(line)).group() + "\n")
-                app.sysInfo.see(tk.END)
+                self.app.sysInfo.insert(
+                    'end',
+                    "正在转码 " + re.search(r'frame.*', str(line)).group() + "\n")
+                self.app.sysInfo.see(tk.END)
         self.process.communicate()
         if self.process.poll() == 0:
-            app.sysInfo.insert('end', filename + " success! 转码完成！ " + "\n")
-            app.sysInfo.see(tk.END)
+            self.app.sysInfo.insert('end',
+                                    self.file + " success! 转码完成！ " + "\n")
+            self.app.sysInfo.see(tk.END)
+            self.app.sysInfo.config(state='disable')
+            return False
         else:
-            app.sysInfo.insert('end', filename + " error! 转码出错！ " + "\n")
-            app.sysInfo.see(tk.END)
-        app.sysInfo.config(state='disable')
+            self.app.sysInfo.insert('end', self.file + " error! 转码出错！ " + "\n")
+            self.app.sysInfo.see(tk.END)
+            self.app.sysInfo.config(state='disable')
+            return True
+        
 
     def get_seconds(self, time):
         h = int(time[0:2])
@@ -60,10 +79,6 @@ class ffmpegClass():
         ts = (h * 60 * 60) + (m * 60) + s + (ms / 1000)
         return ts
 
-    def ffmpegThread(self, app, filename):
-        self.thread = threading.Thread(target=self.ffmpegRun, args=(app, filename), daemon=True)
-        self.thread.start()
-
     def ffmpegStop(self):
         try:
             self.process.stdin.write('q')
@@ -72,21 +87,37 @@ class ffmpegClass():
         except:
             pass
 
+
 def runcode(self):
     global selfName
     selfName = self
+    self.names = locals()
+    pool = ThreadPoolExecutor(max_workers=2)
+    task_list = []
     for i in range(len(cmds)):
         cmd = cmds[i]
-        file= files[i]
-        exec(f'self.n{i}=ffmpegClass(cmd)')
-        exec(f'self.n{i}.ffmpegThread(self, file)')
+        file = files[i]
+        self.names[str(i)] = ffmpegClass(cmd, self, file)
+        task = pool.submit(self.names[str(i)].ffmpegRun)
+        task_list.append(task)
+
+        def get_result(future):
+            try:
+                if future.result():
+                    pool.shutdown(wait=False, cancel_futures=True)
+            except:
+                pass
+        task.add_done_callback(get_result)
+
+
 
 def stopcode(self):
     for i in range(len(cmds)):
         try:
-            exec(f'self.n{i}.ffmpegStop()')
+            self.names[str(i)].ffmpegStop()
         except:
             pass
+
 
 def on_closing(self):
     for i in range(len(cmds)):
@@ -98,19 +129,28 @@ def on_closing(self):
     os.remove('weixin.png')
     sys.exit()
 
+
 def browsePath(self, i):
-    videoFile = [('视频文件', '*.mp4'), ('视频文件', '*.m4v'),  ('视频文件', '*.mkv'), ('视频文件', '*.mts'), ('视频文件', '*.avi'), ('视频文件', '*.mov'),
-                        ('视频文件', '*.mpg'), ('视频文件', '*.flv'), ('视频文件', '*.dat'), ('视频文件', '*.wmv'), ('视频文件', '*.rm'), ('视频文件', '*.rmvb'), ('视频文件', '*.mpeg'), ('视频文件', '*.3gp')]
-    audioFile = [('音频文件', '*aac'), ('音频文件', 'ac3'), ('音频文件', 'mp3'), ('音频文件', 'wav'), ('音频文件', 'm4a')]
+    videoFile = [('视频文件', '*.mp4'), ('视频文件', '*.m4v'), ('视频文件', '*.mkv'),
+                 ('视频文件', '*.mts'), ('视频文件', '*.avi'), ('视频文件', '*.mov'),
+                 ('视频文件', '*.mpg'), ('视频文件', '*.flv'), ('视频文件', '*.dat'),
+                 ('视频文件', '*.wmv'), ('视频文件', '*.rm'), ('视频文件', '*.rmvb'),
+                 ('视频文件', '*.mpeg'), ('视频文件', '*.3gp')]
+    audioFile = [('音频文件', '*aac'), ('音频文件', 'ac3'), ('音频文件', 'mp3'),
+                 ('音频文件', 'wav'), ('音频文件', 'm4a')]
     if i == 42:
         path = filedialog.askopenfilename(filetypes=audioFile)
     else:
         path = filedialog.askopenfilename(filetypes=videoFile)
     exec(f'self.file_path{i}.set(path)')
 
+
 def browseDir(self):
-    videoFile2 = ['mp4', ' m4v', ' mkv', 'mts', 'avi', 'mov', 'mpg', 'flv', 'dat', 'wmv', '.rm', 'mvb', 'peg', '3gp']
-    self.files=[]
+    videoFile2 = [
+        'mp4', ' m4v', ' mkv', 'mts', 'avi', 'mov', 'mpg', 'flv', 'dat', 'wmv',
+        '.rm', 'mvb', 'peg', '3gp'
+    ]
+    self.files = []
     path = filedialog.askdirectory()
     if path:
         self.file_path5.set(path)
@@ -118,13 +158,19 @@ def browseDir(self):
             if file[-3:] in videoFile2:
                 fullname = path + "/" + file
                 self.files.append(fullname)
-        self.amount.set("此文件夹中共有"+str(len(self.files))+"个视频文件，批量转码耗时较长，请在空闲时间使用本功能进行转码")
+        self.amount.set("此文件夹中共有" + str(len(self.files)) +
+                        "个视频文件，批量转码耗时较长，请在空闲时间使用本功能进行转码")
+
 
 def addList(self):
-    videoFile = [('视频文件', '*.mp4'), ('视频文件', '*.m4v'),  ('视频文件', '*.mkv'), ('视频文件', '*.mts'), ('视频文件', '*.avi'), ('视频文件', '*.mov'),
-                        ('视频文件', '*.mpg'), ('视频文件', '*.flv'), ('视频文件', '*.dat'), ('视频文件', '*.wmv'), ('视频文件', '*.rm'), ('视频文件', '*.rmvb'), ('视频文件', '*.mpeg'), ('视频文件', '*.3gp')]
+    videoFile = [('视频文件', '*.mp4'), ('视频文件', '*.m4v'), ('视频文件', '*.mkv'),
+                 ('视频文件', '*.mts'), ('视频文件', '*.avi'), ('视频文件', '*.mov'),
+                 ('视频文件', '*.mpg'), ('视频文件', '*.flv'), ('视频文件', '*.dat'),
+                 ('视频文件', '*.wmv'), ('视频文件', '*.rm'), ('视频文件', '*.rmvb'),
+                 ('视频文件', '*.mpeg'), ('视频文件', '*.3gp')]
     path = filedialog.askopenfilename(filetypes=videoFile)
     self.fileList.insert('end', path)
+
 
 def delList(self):
     index = self.fileList.curselection()
@@ -132,15 +178,17 @@ def delList(self):
         return
     self.fileList.delete(index)
 
+
 def getIndex(self, event):
     self.fileList.index = self.fileList.nearest(event.y)
+
 
 def dragIndex(self, event):
     newIndex = self.fileList.nearest(event.y)
     if newIndex < self.fileList.index:
         x = self.fileList.get(newIndex)
         self.fileList.delete(newIndex)
-        self.fileList.insert(newIndex+1, x)
+        self.fileList.insert(newIndex + 1, x)
         self.fileList.index = newIndex
     elif newIndex > self.fileList.index:
         x = self.fileList.get(newIndex)
@@ -148,18 +196,20 @@ def dragIndex(self, event):
         self.fileList.insert(newIndex - 1, x)
         self.fileList.index = newIndex
 
+
 def cutFile(self):
     cmds.clear()
     files.clear()
     filename = self.filePathEnt1.get()
     startTime = self.time1.get()
     endtime = self.time2.get()
-    newName = "_new_" + str(int(time.time()))[4:]+".mp4"
-    cmd = "ffmpeg", "-ss", startTime, "-t", endtime, "-i", filename, "-c", "copy", filename+newName
+    newName = "_new_" + str(int(time.time()))[4:] + ".mp4"
+    cmd = "ffmpeg", "-ss", startTime, "-t", endtime, "-i", filename, "-c", "copy", filename + newName
     cmd = ' '.join(cmd)
     cmds.append(cmd)
     files.append(filename + newName + ".mp4")
     runcode(self)
+
 
 def splitFile(self):
     cmds.clear()
@@ -176,6 +226,7 @@ def splitFile(self):
     files.append(filename + newName + ".m4a")
     runcode(self)
 
+
 def joinFile(self):
     cmds.clear()
     files.clear()
@@ -186,12 +237,13 @@ def joinFile(self):
     textName = path + "/" + newName + '.txt'
     with open(textName, 'w') as f:
         for line in filelist:
-            f.write(r"file '"+line+"'\n")
+            f.write(r"file '" + line + "'\n")
     cmd = "ffmpeg", "-f", "concat", "-safe", "0", "-i", textName, "-c", "copy", filename + "_new_" + newName + ".mp4"
     cmd = ' '.join(cmd)
     cmds.append(cmd)
-    files.append(filename+ newName + ".mp4")
+    files.append(filename + newName + ".mp4")
     runcode(self)
+
 
 def mergeFile(self):
     cmds.clear()
@@ -205,6 +257,7 @@ def mergeFile(self):
     cmds.append(cmd)
     files.append(filename + newName + ".mp4")
     runcode(self)
+
 
 def batCode(self):
     cmds.clear()
@@ -223,6 +276,7 @@ def batCode(self):
         files.append(filename + newName + ".mp4")
     runcode(self)
 
+
 def selfCode(self):
     cmds.clear()
     files.clear()
@@ -234,13 +288,14 @@ def selfCode(self):
     level = self.opt3.get()
     tune = self.opt4.get()
     crf = str(self.opt5.get())
-    ab = str(self.opt6.get())+"k"
+    ab = str(self.opt6.get()) + "k"
     # cmd = "ffmpeg", "-i", file, "-c:v", "libx264", "-profile", "high", "-preset", "veryfast", "-level", "4.1", "-b:v", "2000k", "-bufsize", "2000k", "-pix_fmt", "yuv420p", "-coder", "1", "-refs", "3", "-c:a", "aac", "-ab", "128k", file + "_new.mp4"
     cmd = "ffmpeg", "-i", path, "-c:v", "libx264", "-profile:v", profile, "-preset:v", preset, "-level", level, "-tune", tune, "-crf", crf, "-pix_fmt", "yuv420p", "-coder", "1", "-refs", "3", "-acodec", "aac", "-ab", ab, filename + newName + ".mp4"
     cmd = ' '.join(cmd)
     cmds.append(cmd)
     files.append(filename + newName + ".mp4")
     runcode(self)
+
 
 def checkVer(version, version_URL, home_URL):
     res = r"version:\s\d\.\d\.\d"
@@ -250,7 +305,8 @@ def checkVer(version, version_URL, home_URL):
         html = ver.text
         versionNew = re.search(res, html).group()
         if version < versionNew:
-            mes = messagebox.askokcancel(title='发现新版本', message='发现新版本,点击查看详细信息')
+            mes = messagebox.askokcancel(title='发现新版本',
+                                         message='发现新版本,点击查看详细信息')
         if mes:
             webbrowser.open(home_URL, new=0)
     except:
@@ -261,137 +317,276 @@ class Frame1(ttk.Frame):
     def __init__(self, master, *args, **kwargs):
         super().__init__(master, *args, **kwargs)
         # 第一个标签页，截取视频----------------------------------------------------------------------------------------------
-        tk.Label(master, text="请选择视频文件", font=('Arial'),  height=2).place(x=10, y=5)
-        tk.Button(master, text='浏览', width=6, height=1, command=lambda: browsePath(self,1)).place(x=140, y=12)
+        tk.Label(master, text="请选择视频文件", font=('Arial'), height=2).place(x=10,
+                                                                         y=5)
+        tk.Button(master,
+                  text='浏览',
+                  width=6,
+                  height=1,
+                  command=lambda: browsePath(self, 1)).place(x=140, y=12)
         self.file_path1 = tk.StringVar()
         self.file_path1.set("")
-        self.filePathEnt1 = tk.Entry(master, textvariable=self.file_path1, width=40, show=None)
+        self.filePathEnt1 = tk.Entry(master,
+                                     textvariable=self.file_path1,
+                                     width=40,
+                                     show=None)
         self.filePathEnt1.place(x=220, y=15)
-        tk.Label(master, text="开始时间（格式 hh:mm:ss）", font=('Arial'), height=2).place(x=10, y=50)
+        tk.Label(master, text="开始时间（格式 hh:mm:ss）", font=('Arial'),
+                 height=2).place(x=10, y=50)
         self.time1 = tk.Entry(master, show=None, width=12)
         self.time1.place(x=220, y=60)
         self.time1.insert(0, "00:00:00")
-        tk.Label(master, text="结束时间", font=('Arial'), height=2).place(x=370, y=50)
+        tk.Label(master, text="结束时间", font=('Arial'), height=2).place(x=370,
+                                                                      y=50)
         self.time2 = tk.Entry(master, show=None, width=12)
         self.time2.place(x=460, y=60)
         self.time2.insert(0, "00:00:00")
-        tk.Button(master, text='开始截取', width=8, height=1, command=lambda: cutFile(self)).place(x=620, y=35)
-        tk.Button(master, text='停止编码', width=8, height=1, command=lambda: stopcode(self)).place(x=620, y=75)
-        tk.Label(master, text='时间格式既支持hh:mm:ss 时：分：秒 的格式，也支持 00：00：00.000 小数点后3位为毫秒的格式。', font=(
-            'Arial',10),  height=2).place(x=10, y=150)
-        self.sysText = tk.Label(master, text="转码进度信息：", font=('Arial'),  height=2)
+        tk.Button(master,
+                  text='开始截取',
+                  width=8,
+                  height=1,
+                  command=lambda: cutFile(self)).place(x=620, y=35)
+        tk.Button(master,
+                  text='停止编码',
+                  width=8,
+                  height=1,
+                  command=lambda: stopcode(self)).place(x=620, y=75)
+        tk.Label(
+            master,
+            text='时间格式既支持hh:mm:ss 时：分：秒 的格式，也支持 00：00：00.000 小数点后3位为毫秒的格式。',
+            font=('Arial', 10),
+            height=2).place(x=10, y=150)
+        self.sysText = tk.Label(master,
+                                text="转码进度信息：",
+                                font=('Arial'),
+                                height=2)
         self.sysInfo = tk.Text(master, background='#fafafa', height=22)
         self.sysText.place(x=30, y=225)
         self.sysInfo.place(x=140, y=225)
         self.sysInfo.config(state='disable')
+
 
 class Frame2(ttk.Frame):
     def __init__(self, master, *args, **kwargs):
         super().__init__(master, *args, **kwargs)
         # 第二个标签页，连接视频----------------------------------------------------------------------------------------------
-        tk.Label(master, text="请添加视频文件", font=('Arial'),  height=2).place(x=10, y=5)
-        self.fileList = tk.Listbox(master, width=50,height=9, show=None)
-        self.fileList.bind("<Button-1>", lambda event:getIndex(self, event))
-        self.fileList.bind("<B1-Motion>", lambda event:dragIndex(self, event))
+        tk.Label(master, text="请添加视频文件", font=('Arial'), height=2).place(x=10,
+                                                                         y=5)
+        self.fileList = tk.Listbox(master, width=50, height=9, show=None)
+        self.fileList.bind("<Button-1>", lambda event: getIndex(self, event))
+        self.fileList.bind("<B1-Motion>", lambda event: dragIndex(self, event))
         self.fileList.place(x=140, y=15)
-        tk.Button(master, text='添加', width=8, height=1, command=lambda: addList(self)).place(x=630, y=12)
-        tk.Button(master, text='删除', width=8, height=1, command=lambda: delList(self)).place(x=630, y=55)
-        tk.Button(master, text='开始连接', width=8, height=1, command=lambda: joinFile(self)).place(x=630, y=115)
-        tk.Button(master, text='停止编码', width=8, height=1, command=lambda: stopcode(self)).place(x=630, y=155)
-        tk.Label(master, text='用于连接的视频必须使用相同编码，否则会出现播放错误。不同编码视频必须先批量转码相同编码格式。', font=(
-            'Arial',10),  height=2).place(x=10, y=190)
-        self.sysText = tk.Label(master, text="转码进度信息：", font=('Arial'),  height=2)
+        tk.Button(master,
+                  text='添加',
+                  width=8,
+                  height=1,
+                  command=lambda: addList(self)).place(x=630, y=12)
+        tk.Button(master,
+                  text='删除',
+                  width=8,
+                  height=1,
+                  command=lambda: delList(self)).place(x=630, y=55)
+        tk.Button(master,
+                  text='开始连接',
+                  width=8,
+                  height=1,
+                  command=lambda: joinFile(self)).place(x=630, y=115)
+        tk.Button(master,
+                  text='停止编码',
+                  width=8,
+                  height=1,
+                  command=lambda: stopcode(self)).place(x=630, y=155)
+        tk.Label(master,
+                 text='用于连接的视频必须使用相同编码，否则会出现播放错误。不同编码视频必须先批量转码相同编码格式。',
+                 font=('Arial', 10),
+                 height=2).place(x=10, y=190)
+        self.sysText = tk.Label(master,
+                                text="转码进度信息：",
+                                font=('Arial'),
+                                height=2)
         self.sysInfo = tk.Text(master, background='#fafafa', height=22)
         self.sysText.place(x=30, y=225)
         self.sysInfo.place(x=140, y=225)
         self.sysInfo.config(state='disable')
+
 
 class Frame3(ttk.Frame):
     def __init__(self, master, *args, **kwargs):
         super().__init__(master, *args, **kwargs)
         # 第三个标签页，分割提取音视频----------------------------------------------------------------------------------------------
-        tk.Label(master, text="请选择视频文件", font=('Arial'),  height=2).place(x=10, y=50)
-        tk.Button(master, text='浏览', width=6, height=1, command=lambda: browsePath(self, 3)).place(x=140, y=55)
+        tk.Label(master, text="请选择视频文件", font=('Arial'), height=2).place(x=10,
+                                                                         y=50)
+        tk.Button(master,
+                  text='浏览',
+                  width=6,
+                  height=1,
+                  command=lambda: browsePath(self, 3)).place(x=140, y=55)
         self.file_path3 = tk.StringVar()
         self.file_path3.set("")
-        self.filePathEnt3 = tk.Entry(master, textvariable=self.file_path3, width=40, show=None)
+        self.filePathEnt3 = tk.Entry(master,
+                                     textvariable=self.file_path3,
+                                     width=40,
+                                     show=None)
         self.filePathEnt3.place(x=220, y=60)
-        tk.Button(master, text='开始提取', width=8, height=1, command=lambda:splitFile(self)).place(x=630, y=35)
-        tk.Button(master, text='停止编码', width=8, height=1, command=lambda:stopcode(self)).place(x=630, y=75)
-        self.sysText = tk.Label(master, text="转码进度信息：", font=('Arial'),  height=2)
+        tk.Button(master,
+                  text='开始提取',
+                  width=8,
+                  height=1,
+                  command=lambda: splitFile(self)).place(x=630, y=35)
+        tk.Button(master,
+                  text='停止编码',
+                  width=8,
+                  height=1,
+                  command=lambda: stopcode(self)).place(x=630, y=75)
+        self.sysText = tk.Label(master,
+                                text="转码进度信息：",
+                                font=('Arial'),
+                                height=2)
         self.sysInfo = tk.Text(master, background='#fafafa', height=22)
         self.sysText.place(x=30, y=225)
         self.sysInfo.place(x=140, y=225)
         self.sysInfo.config(state='disable')
+
 
 class Frame4(ttk.Frame):
     def __init__(self, master, *args, **kwargs):
         super().__init__(master, *args, **kwargs)
         # 第四个标签页，音视频合成----------------------------------------------------------------------------------------------
-        tk.Label(master, text="请选择视频文件", font=('Arial'),  height=2).place(x=10, y=5)
-        tk.Button(master, text='浏览', width=6, height=1,
-                    command=lambda: browsePath(self,4)).place(x=140, y=12)
+        tk.Label(master, text="请选择视频文件", font=('Arial'), height=2).place(x=10,
+                                                                         y=5)
+        tk.Button(master,
+                  text='浏览',
+                  width=6,
+                  height=1,
+                  command=lambda: browsePath(self, 4)).place(x=140, y=12)
         self.file_path4 = tk.StringVar()
         self.file_path4.set("")
-        self.filePathEnt4 = tk.Entry(master, textvariable=self.file_path4, width=40, show=None)
+        self.filePathEnt4 = tk.Entry(master,
+                                     textvariable=self.file_path4,
+                                     width=40,
+                                     show=None)
         self.filePathEnt4.place(x=220, y=15)
-        tk.Label(master, text="请选择音频文件", font=('Arial'),  height=2).place(x=10, y=55)
-        tk.Button(master, text='浏览', width=6, height=1, command=lambda: browsePath(self,42)).place(x=140, y=62)
+        tk.Label(master, text="请选择音频文件", font=('Arial'), height=2).place(x=10,
+                                                                         y=55)
+        tk.Button(master,
+                  text='浏览',
+                  width=6,
+                  height=1,
+                  command=lambda: browsePath(self, 42)).place(x=140, y=62)
         self.file_path42 = tk.StringVar()
         self.file_path42.set("")
-        self.filePathEnt42 = tk.Entry(master, textvariable=self.file_path42, width=40, show=None)
+        self.filePathEnt42 = tk.Entry(master,
+                                      textvariable=self.file_path42,
+                                      width=40,
+                                      show=None)
         self.filePathEnt42.place(x=220, y=65)
-        tk.Button(master, text='开始合并', width=8, height=1, command= lambda: mergeFile(self)).place(x=630, y=30)
-        tk.Button(master, text='停止编码', width=8, height=1, command= lambda: mergeFile(self)).place(x=630, y=65)
-        self.sysText = tk.Label(master, text="转码进度信息：", font=('Arial'),  height=2)
+        tk.Button(master,
+                  text='开始合并',
+                  width=8,
+                  height=1,
+                  command=lambda: mergeFile(self)).place(x=630, y=30)
+        tk.Button(master,
+                  text='停止编码',
+                  width=8,
+                  height=1,
+                  command=lambda: mergeFile(self)).place(x=630, y=65)
+        self.sysText = tk.Label(master,
+                                text="转码进度信息：",
+                                font=('Arial'),
+                                height=2)
         self.sysInfo = tk.Text(master, background='#fafafa', height=22)
         self.sysText.place(x=30, y=225)
         self.sysInfo.place(x=140, y=225)
         self.sysInfo.config(state='disable')
 
+
 class Frame5(ttk.Frame):
     def __init__(self, master, *args, **kwargs):
         super().__init__(master, *args, **kwargs)
         # 第五个标签页，批量压缩视频----------------------------------------------------------------------------------------------
-        tk.Label(master, text="请选择包含视频的文件夹", font=(
-            'Arial'),  height=2).place(x=10, y=5)
-        tk.Button(master, text='浏览', width=6, height=1, command=lambda: browseDir(self)).place(x=200, y=12)
+        tk.Label(master, text="请选择包含视频的文件夹", font=('Arial'),
+                 height=2).place(x=10, y=5)
+        tk.Button(master,
+                  text='浏览',
+                  width=6,
+                  height=1,
+                  command=lambda: browseDir(self)).place(x=200, y=12)
         self.file_path5 = tk.StringVar()
         self.file_path5.set("")
-        self.filePathEnt5 = tk.Entry(master, textvariable=self.file_path5, width=30, show=None)
+        self.filePathEnt5 = tk.Entry(master,
+                                     textvariable=self.file_path5,
+                                     width=30,
+                                     show=None)
         self.filePathEnt5.place(x=280, y=15)
-        tk.Button(master, text='开始压缩', width=8, height=1, command=lambda: batCode(self)).place(x=630, y=50)
-        tk.Button(master, text='停止编码', width=8, height=1, command=lambda: stopcode(self)).place(x=630, y=90)
+        tk.Button(master,
+                  text='开始压缩',
+                  width=8,
+                  height=1,
+                  command=lambda: batCode(self)).place(x=630, y=50)
+        tk.Button(master,
+                  text='停止编码',
+                  width=8,
+                  height=1,
+                  command=lambda: stopcode(self)).place(x=630, y=90)
         self.amount = tk.StringVar()
         self.amount.set("待编码文件数量")
-        tk.Label(master, textvariable=self.amount, font=('Arial'),  height=2).place(x=10, y=120)
-        tk.Label(master, text="请选择压缩选项： ", font=('Arial'),  height=2).place(x=10, y=60)
+        tk.Label(master, textvariable=self.amount, font=('Arial'),
+                 height=2).place(x=10, y=120)
+        tk.Label(master, text="请选择压缩选项： ", font=('Arial'),
+                 height=2).place(x=10, y=60)
         self.option = tk.IntVar()
         self.option.set(1)
-        self.option1 = Radiobutton(master, text="更高质量", variable=self.option, value=1)
+        self.option1 = Radiobutton(master,
+                                   text="更高质量",
+                                   variable=self.option,
+                                   value=1)
         self.option1.place(x=150, y=70)
-        self.option2 = Radiobutton(master, text="更小体积", variable=self.option, value=0)
+        self.option2 = Radiobutton(master,
+                                   text="更小体积",
+                                   variable=self.option,
+                                   value=0)
         self.option2.place(x=300, y=70)
-        self.sysText = tk.Label(master, text="转码进度信息：", font=('Arial'),  height=2)
+        self.sysText = tk.Label(master,
+                                text="转码进度信息：",
+                                font=('Arial'),
+                                height=2)
         self.sysInfo = tk.Text(master, background='#fafafa', height=22)
         self.sysText.place(x=30, y=225)
         self.sysInfo.place(x=140, y=225)
         self.sysInfo.config(state='disable')
+
 
 class Frame6(ttk.Frame):
     def __init__(self, master, *args, **kwargs):
         super().__init__(master, *args, **kwargs)
         # 第六个标签页，高级视频转码----------------------------------------------------------------------------------------------
         # "-profile:v high", "-preset:v fast", "-level 4.2", "-tune film", "-crf 18","-ab 128k",
-        tk.Label(master, text="请选择视频文件", font=('Arial'),  height=2).place(x=10, y=5)
-        tk.Button(master, text='浏览', width=6, height=1, command=lambda: browsePath(self, 6)).place(x=140, y=12)
+        tk.Label(master, text="请选择视频文件", font=('Arial'), height=2).place(x=10,
+                                                                         y=5)
+        tk.Button(master,
+                  text='浏览',
+                  width=6,
+                  height=1,
+                  command=lambda: browsePath(self, 6)).place(x=140, y=12)
         self.file_path6 = tk.StringVar()
         self.file_path6.set("")
-        self.filePathEnt6 = tk.Entry(master, textvariable=self.file_path6, width=50, show=None)
+        self.filePathEnt6 = tk.Entry(master,
+                                     textvariable=self.file_path6,
+                                     width=50,
+                                     show=None)
         self.filePathEnt6.place(x=220, y=15)
-        tk.Button(master, text='开始转码', width=8, height=1, command=lambda: selfCode(self)).place(x=640, y=80)
-        tk.Button(master, text='停止编码', width=8, height=1, command=lambda: stopcode(self)).place(x=640, y=120)
-        tk.Label(master, text="请选择压缩选项： ", font=('Arial'),  height=2).place(x=10, y=60)
+        tk.Button(master,
+                  text='开始转码',
+                  width=8,
+                  height=1,
+                  command=lambda: selfCode(self)).place(x=640, y=80)
+        tk.Button(master,
+                  text='停止编码',
+                  width=8,
+                  height=1,
+                  command=lambda: stopcode(self)).place(x=640, y=120)
+        tk.Label(master, text="请选择压缩选项： ", font=('Arial'),
+                 height=2).place(x=10, y=60)
         tk.Label(master, text="画面质量： ", font=('Arial', 9)).place(x=160, y=55)
         self.opt1s = ("high", "main", "extended", "baseline")
         self.opt1 = tk.StringVar(master)
@@ -416,28 +611,53 @@ class Frame6(ttk.Frame):
         self.opt4.set("film")
         self.optionMenu4 = OptionMenu(master, self.opt4, *self.opt4s)
         self.optionMenu4.place(x=150, y=180)
-        tk.Label(master, text="压缩等级（数字越大，体积越小)", font=('Arial', 9)).place(x=290, y=135)
-        self.opt5 = Scale(master, from_=16, to=28, tickinterval=2, orient="horizontal", length=200,)
+        tk.Label(master, text="压缩等级（数字越大，体积越小)",
+                 font=('Arial', 9)).place(x=290, y=135)
+        self.opt5 = Scale(
+            master,
+            from_=16,
+            to=28,
+            tickinterval=2,
+            orient="horizontal",
+            length=200,
+        )
         self.opt5.set(22)
         self.opt5.place(x=270, y=160)
         tk.Label(master, text="音频码率k： ", font=('Arial', 9)).place(x=560, y=135)
         self.opt6 = tk.StringVar(master)
-        self.opt6 = Scale(master, from_=96, to=196, resolution=32, tickinterval=32, orient="horizontal", length=100,)
+        self.opt6 = Scale(
+            master,
+            from_=96,
+            to=196,
+            resolution=32,
+            tickinterval=32,
+            orient="horizontal",
+            length=100,
+        )
         self.opt6.set("128")
         self.opt6.place(x=540, y=160)
-        self.sysText = tk.Label(master, text="转码进度信息：", font=('Arial'),  height=2)
+        self.sysText = tk.Label(master,
+                                text="转码进度信息：",
+                                font=('Arial'),
+                                height=2)
         self.sysInfo = tk.Text(master, background='#fafafa', height=22)
         self.sysText.place(x=30, y=225)
         self.sysInfo.place(x=140, y=225)
         self.sysInfo.config(state='disable')
 
+
 class Frame7(ttk.Frame):
     def __init__(self, master, *args, **kwargs):
         super().__init__(master, *args, **kwargs)
         # 第七个标签页，关于软件----------------------------------------------------------------------------------------------
-        tk.Label(master, text="当前版本： " + version, font=('Arial'), height=2).place(x=10, y=5)
-        tk.Button(master, text='点击查看版本信息', width=16, height=1,
-                  command=lambda: webbrowser.open(home_URL, new=0)).place(x=250, y=12)
+        tk.Label(master, text="当前版本： " + version, font=('Arial'),
+                 height=2).place(x=10, y=5)
+        tk.Button(master,
+                  text='点击查看版本信息',
+                  width=16,
+                  height=1,
+                  command=lambda: webbrowser.open(home_URL, new=0)).place(
+                      x=250, y=12)
         aboutTxt = '''
         小兔子转换器 (Little Rabbit Convert) 是为了方便使用FFMPEG而设计的一个简易的FFMPEG图形界面（GUI）。\n
         Little Rabbit Convert的所有功能完全依赖于FFMPEG。因此您的系统中如果没有安装过FFMPEG,
@@ -457,11 +677,15 @@ class Frame7(ttk.Frame):
         about.config(state='disable')
         about.place(x=0, y=60)
 
+
 class frameClass(ttk.Frame):
     def __init__(self, master, *args, **kwargs):
         super().__init__(master, *args, **kwargs)
         self.tab = ttk.Notebook(master)
-        tabName = ["tabname", "  视频截取  ", "  多视频连接  ", "  音视频分离  ", "  音视频合成  ", "  批量压缩  ", "  自定义转码  ", "  关   于  "]
+        tabName = [
+            "tabname", "  视频截取  ", "  多视频连接  ", "  音视频分离  ", "  音视频合成  ",
+            "  批量压缩  ", "  自定义转码  ", "  关   于  "
+        ]
         self.frame1 = tk.Frame(self.tab)
         tab1 = self.tab.add(self.frame1, text=tabName[1])
         self.frame2 = tk.Frame(self.tab)
@@ -477,31 +701,30 @@ class frameClass(ttk.Frame):
         self.frame7 = tk.Frame(self.tab)
         tab7 = self.tab.add(self.frame7, text=tabName[7])
         self.tab.pack(padx=5, pady=5, expand=True, fill=tk.BOTH)
-        frame1=Frame1(self.frame1)
-        frame2=Frame2(self.frame2)
-        frame3=Frame3(self.frame3)
-        frame4=Frame4(self.frame4)
-        frame5=Frame5(self.frame5)
-        frame6=Frame6(self.frame6)
-        frame7=Frame7(self.frame7)
-        
+        frame1 = Frame1(self.frame1)
+        frame2 = Frame2(self.frame2)
+        frame3 = Frame3(self.frame3)
+        frame4 = Frame4(self.frame4)
+        frame5 = Frame5(self.frame5)
+        frame6 = Frame6(self.frame6)
+        frame7 = Frame7(self.frame7)
 
 
 def main():
-
     root = tk.Tk()
     root.geometry('800x600')
     root.title("Little Rabbit Convert")
     frame = frameClass(root)
-    versionCheckThread = threading.Thread(target=checkVer, args=(version, version_URL, home_URL), daemon=True)
+    versionCheckThread = threading.Thread(target=checkVer,args=(version, version_URL, home_URL), daemon=True)
     versionCheckThread.start()
     root.protocol("WM_DELETE_WINDOW", lambda: on_closing(root))
     root.mainloop()
 
+
 if __name__ == '__main__':
     with open('weixin.png', 'wb') as f:
         f.write(base64.b64decode(weixinpng.img))
-    version = 'version: 1.2.0'
+    version = 'version: 1.3.0'
     version_URL = 'https://gitee.com/wbs21/lrconvert/blob/master/version.md'
     home_URL = 'https://gitee.com/wbs21/lrconvert/tree/master'
     main()
