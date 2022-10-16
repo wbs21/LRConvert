@@ -23,7 +23,11 @@
       </sizepolicy>
      </property>
      <property name="currentIndex">
+<<<<<<< HEAD
       <number>6</number>
+=======
+      <number>0</number>
+>>>>>>> 9b8d760e761b339657bcd7d6b07044fd0f43843e
      </property>
      <widget class="QWidget" name="T1">
       <attribute name="title">
@@ -819,6 +823,16 @@
           </spacer>
          </item>
          <item>
+<<<<<<< HEAD
+=======
+          <widget class="QLabel" name="T7weixin">
+           <property name="text">
+            <string>TextLabel</string>
+           </property>
+          </widget>
+         </item>
+         <item>
+>>>>>>> 9b8d760e761b339657bcd7d6b07044fd0f43843e
           <spacer name="verticalSpacer_8">
            <property name="orientation">
             <enum>Qt::Vertical</enum>
