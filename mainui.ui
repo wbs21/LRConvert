@@ -23,11 +23,7 @@
       </sizepolicy>
      </property>
      <property name="currentIndex">
-<<<<<<< HEAD
       <number>6</number>
-=======
-      <number>0</number>
->>>>>>> 9b8d760e761b339657bcd7d6b07044fd0f43843e
      </property>
      <widget class="QWidget" name="T1">
       <attribute name="title">
@@ -492,7 +488,13 @@
       <attribute name="title">
        <string>批量压缩</string>
       </attribute>
-      <layout class="QVBoxLayout" name="verticalLayout_14">
+      <layout class="QVBoxLayout" name="verticalLayout_14" stretch="1,2,1,2,5,1,5">
+       <property name="spacing">
+        <number>9</number>
+       </property>
+       <property name="bottomMargin">
+        <number>9</number>
+       </property>
        <item>
         <spacer name="verticalSpacer_16">
          <property name="orientation">
@@ -565,21 +567,21 @@
          <item>
           <widget class="QLabel" name="label_17">
            <property name="text">
-            <string>选择压缩选项：</string>
+            <string>选择编码码率：</string>
            </property>
           </widget>
          </item>
          <item>
-          <widget class="QRadioButton" name="T5big">
-           <property name="text">
-            <string>更高质量</string>
+          <widget class="QComboBox" name="T5bit">
+           <property name="layoutDirection">
+            <enum>Qt::RightToLeft</enum>
            </property>
           </widget>
          </item>
          <item>
-          <widget class="QRadioButton" name="T5small">
+          <widget class="QLabel" name="label_20">
            <property name="text">
-            <string>更小体积</string>
+            <string>Mbp/s</string>
            </property>
           </widget>
          </item>
@@ -604,6 +606,29 @@
           </widget>
          </item>
         </layout>
+       </item>
+       <item>
+        <widget class="QGroupBox" name="groupBox_11">
+         <property name="title">
+          <string>码率推荐：</string>
+         </property>
+         <layout class="QVBoxLayout" name="verticalLayout_15">
+          <item>
+           <widget class="QLabel" name="T5info_2">
+            <property name="text">
+             <string>1080P 视频压缩，推荐4-12Mbp/s。</string>
+            </property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QLabel" name="T5info_3">
+            <property name="text">
+             <string>4K 视频压缩，推荐12-20Mbp/s。</string>
+            </property>
+           </widget>
+          </item>
+         </layout>
+        </widget>
        </item>
        <item>
         <spacer name="verticalSpacer_18">
@@ -823,16 +848,6 @@
           </spacer>
          </item>
          <item>
-<<<<<<< HEAD
-=======
-          <widget class="QLabel" name="T7weixin">
-           <property name="text">
-            <string>TextLabel</string>
-           </property>
-          </widget>
-         </item>
-         <item>
->>>>>>> 9b8d760e761b339657bcd7d6b07044fd0f43843e
           <spacer name="verticalSpacer_8">
            <property name="orientation">
             <enum>Qt::Vertical</enum>

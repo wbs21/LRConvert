@@ -8,7 +8,7 @@ import webbrowser
 from concurrent.futures import ThreadPoolExecutor
 import subprocess
 import sys
-import pathlib
+from pathlib import Path
 import re
 import threading
 import time
@@ -49,10 +49,10 @@ class ffmpegClass():
                     self.infotask("正在转码 " + re.search(r'frame.*', str(line)).group() + "\n")
         self.process.communicate()
         if self.process.poll() == 0:
-            self.infotask(f"{self.file}success! 转码完成！\n")
+            self.infotask(f"{self.file}...success! ......转码完成！\n")
             return False
         else:
-            self.infotask(f"{self.file}error! 转码出错！\n")
+            self.infotask(f"{self.file}...error! ......转码出错！\n")
             return True
 
     def get_seconds(self, time):
@@ -107,7 +107,8 @@ class mainWindow(QWidget, Ui_Form):
         self.T5start.clicked.connect(self.batCode)
         self.T5stop.clicked.connect(self.stopcode)
         self.T5add.clicked.connect(self.browseDir)
-        self.T5big.setChecked(True)
+        self.T5bit.addItems(['2', '4', '8', '10', '12', '16', '20'])
+        self.T5bit.setCurrentIndex(2)
         self.T6start.clicked.connect(self.selfCode)
         self.T6stop.clicked.connect(self.stopcode)
         self.T6add.clicked.connect(lambda: self.browsePath(6))
@@ -127,11 +128,15 @@ class mainWindow(QWidget, Ui_Form):
         self.newVer(version_URL)
         self.T7about.append(aboutTxt)
         self.T7check.clicked.connect(lambda: webbrowser.open(home_URL, new=0))
-
+        self.info = ''
         infoMs.text_print.connect(self.printToGui)
         verMs.text_print.connect(self.printToVer)
 
     def printToGui(self, text):
+        if 'success' in str(text):
+            self.info = text + self.info
+        text = self.info + text
+        self.infobox.clear()
         self.infobox.append(str(text))
         self.infobox.ensureCursorVisible()
 
@@ -203,7 +208,7 @@ class mainWindow(QWidget, Ui_Form):
         self.files.clear()
         filelist = [self.T2listbox.item(i).text() for i in range(self.T2listbox.count())]
         filename = filelist[0]
-        path = str(pathlib.Path(filename).parent)
+        path = str(Path(filename).parent)
         filetype = '.' + filename.split('.')[-1]
         newName = str(int(time.time()))[4:]
         textName = f"{path}/{newName}.txt"
@@ -247,22 +252,19 @@ class mainWindow(QWidget, Ui_Form):
         self.files.clear()
         if directory := QFileDialog.getExistingDirectory(None, "选取文件夹"):
             self.T5file.setText(directory)
-            for file in pathlib.Path(directory).iterdir():
-                if file.name[-3:].lower() in videoFile2:
+            for file in Path(directory).iterdir():
+                if file.suffix.lower() in videoFile2:
                     fullname = f"{directory}/{file.name}"
                     self.files.append(fullname)
             self.T5info.setText(f"此文件夹中共有{len(self.files)}个视频文件，批量转码耗时较长，请利用空闲时间进行转码!")
 
     def batCode(self):
         self.cmds.clear()
+        bitrates = f'{str(self.T5bit.currentText())}000k'
         newName = f"_new_{str(int(time.time()))[4:]}"
         for i in range(len(self.files)):
             filename = self.files[i]
-            if self.T5big.isChecked():
-                cmd = "ffmpeg", "-i", filename, "-c:v", "libx264", "-profile:v", "high", "-preset:v", "slow", "-level", "4.2", "-b:v", "12000k", \
-                    "-bufsize", "2000k", "-pix_fmt", "yuv420p", "-acodec", "aac", "-ab", "128k", filename + newName + ".mp4"
-            else:
-                cmd = "ffmpeg", "-i", filename, "-c:v", "libx264", "-profile:v", "high", "-preset:v", "faster", "-level", "4.1", "-b:v", "4000k", \
+            cmd = "ffmpeg", "-i", filename, "-c:v", "libx264", "-profile:v", "high", "-preset:v", "slow", "-level", "4.2", "-b:v", bitrates, \
                     "-bufsize", "2000k", "-pix_fmt", "yuv420p", "-acodec", "aac", "-ab", "128k", filename + newName + ".mp4"
             cmd = ' '.join(cmd)
             self.cmds.append(cmd)
@@ -315,7 +317,7 @@ class mainWindow(QWidget, Ui_Form):
 
 
 if __name__ == '__main__':
-    videoFile2 = ['mp4', ' m4v', ' mkv', 'mts', 'avi', 'mov', 'mpg', 'flv', 'dat', 'wmv', '.rm', 'mvb', 'peg', '3gp', 'mxf']
+    videoFile2 = ['.mp4', '.m4v', '.mkv', '.mts', '.avi', '.mov', '.mpg', '.flv', '.dat', '.wmv', '.rm', '.rmvb', '.mpeg', '.3gp', '.mxf']
     videoFile = '视频文件(*.mp4 *.m4v *.mkv *.mts *.avi *.mov *.mpg *.flv *.dat *.wmv *.rm *.rmvb *.mpeg *.3gp *.mxf)'
     audioFile = '音频文件(*.aac *.wav *.mp3 *.ac3 *.m4a *.mov)'
     aboutTxt = '''
@@ -327,7 +329,7 @@ if __name__ == '__main__':
         如果您有任何问题及建议，非常期待您的反馈。\n
         '''
 
-    version = 'version: 2.1'
+    version = 'version: 2.2'
     version_URL = 'https://gitee.com/wbs21/lrconvert/blob/master/version.md'
     home_URL = 'https://gitee.com/wbs21/lrconvert/tree/master'
     app = QApplication(sys.argv)
