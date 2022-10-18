@@ -86,7 +86,6 @@ class mainWindow(QWidget, Ui_Form):
         self.setupUi(self)
         self.cmds = []
         self.files = []
-        self.ver = [2.1]
         self.T1add.clicked.connect(lambda: self.browsePath(1))
         self.T1time1.setText('00:00:00')
         self.T1time2.setText('00:00:00')
@@ -109,19 +108,21 @@ class mainWindow(QWidget, Ui_Form):
         self.T5add.clicked.connect(self.browseDir)
         self.T5bit.addItems(['2', '4', '8', '10', '12', '16', '20'])
         self.T5bit.setCurrentIndex(2)
+        self.T5hwacc.addItems(['libx264', 'h264_nvenc', 'h264_videotoolbox'])
+        self.T5hwacc.setCurrentIndex(0)
         self.T6start.clicked.connect(self.selfCode)
         self.T6stop.clicked.connect(self.stopcode)
         self.T6add.clicked.connect(lambda: self.browsePath(6))
-        self.T6quality.addItems(['high422', 'high', 'main', 'extended', 'baseline'])
-        self.T6quality.setCurrentIndex(1)
-        self.T6speed.addItems(['veryfast', 'fast', 'medium', 'slow'])
-        self.T6speed.setCurrentIndex(1)
-        self.T6grade.addItems(['5.1', '4.2', '4.1', '3.1'])
+        self.T6quality.addItems(['libx264', 'h264_nvenc', 'h264_videotoolbox'])
+        self.T6quality.setCurrentIndex(0)
+        self.T6speed.addItems(['fast', 'medium', 'slow'])
+        self.T6speed.setCurrentIndex(0)
+        self.T6grade.addItems(['5.1', '4.2', '4.1'])
         self.T6grade.setCurrentIndex(2)
-        self.T6type.addItems(['film', 'animation', 'stillimage'])
+        self.T6type.addItems(['film', 'animation', 'stillimage', 'psnr', 'ssim'])
         self.T6type.setCurrentIndex(0)
-        self.T6level.addItems(['16', '18', '20', '22', '24', '26', '28'])
-        self.T6level.setCurrentIndex(3)
+        self.T6level.addItems(['2', '4', '8', '16', '20'])
+        self.T6level.setCurrentIndex(2)
         self.T6audio.addItems(['96', '128', '160', '196'])
         self.T6audio.setCurrentIndex(1)
         self.T7this.setText(f'当前版本{version}')
@@ -260,12 +261,20 @@ class mainWindow(QWidget, Ui_Form):
 
     def batCode(self):
         self.cmds.clear()
-        bitrates = f'{str(self.T5bit.currentText())}000k'
+        hwacc = self.T5hwacc.currentText()
+        bitrates = f'{self.T5bit.currentText()}000k'
         newName = f"_new_{str(int(time.time()))[4:]}"
         for i in range(len(self.files)):
             filename = self.files[i]
-            cmd = "ffmpeg", "-i", filename, "-c:v", "libx264", "-profile:v", "high", "-preset:v", "slow", "-level", "4.2", "-b:v", bitrates, \
-                    "-bufsize", "2000k", "-pix_fmt", "yuv420p", "-acodec", "aac", "-ab", "128k", filename + newName + ".mp4"
+            if hwacc == 'h264_nvenc':
+                cmd = "ffmpeg", "-i", filename, "-c:v", 'h264_nvenc', "-profile:v", "high", "-preset:v", "fast", "-level", "5.1", "-b:v", bitrates, \
+                "-bufsize", "2000k", "-pix_fmt", "yuv420p", "-acodec", "aac", "-ab", "128k", filename + newName + ".mp4"
+            elif hwacc == 'h264_videotoolbox':
+                cmd = "ffmpeg", "-i", filename, "-c:v", 'h264_videotoolbox', "-profile:v", "high", "-preset:v", "fast", "-level", "5.1", "-b:v", bitrates, \
+                "-bufsize", "2000k", "-pix_fmt", "yuv420p", "-acodec", "aac", "-ab", "128k", filename + newName + ".mp4"
+            else:
+                cmd = "ffmpeg", "-i", filename, "-c:v", 'libx264', "-profile:v", "high", "-preset:v", "fast", "-level", "4.1", "-b:v", bitrates, \
+                "-bufsize", "2000k", "-pix_fmt", "yuv420p", "-acodec", "aac", "-ab", "128k", filename + newName + ".mp4"
             cmd = ' '.join(cmd)
             self.cmds.append(cmd)
             self.files.append(filename + newName + ".mp4")
@@ -277,25 +286,27 @@ class mainWindow(QWidget, Ui_Form):
         path = self.T6file.text()
         filename = path
         newName = f"_new_{str(int(time.time()))[4:]}"
-        profile = self.T6quality.currentText()
+        hwacc = self.T6quality.currentText()
         preset = self.T6speed.currentText()
         level = self.T6grade.currentText()
         tune = self.T6type.currentText()
-        crf = str(self.T6level.currentText())
+        bitrates = f'{self.T6level.currentText()}000k'
         ab = f"{str(self.T6audio.currentText())}k"
-        if profile == 'high422':
-            cmd = "ffmpeg", "-i", path, "-c:v", "libx264", "-profile:v", profile, "-preset:v", preset, "-level", level, "-tune", tune, "-crf", crf, "-pix_fmt", \
-                "yuv422p10le", "-acodec", "aac", "-ab", ab, filename + newName + ".mp4"
+        if hwacc == 'h264_nvenc':
+            cmd = "ffmpeg", "-i", path, "-c:v", 'h264_nvenc', "-profile:v", "high", "-preset:v", preset, "-level", "5.1", "-b:v", bitrates, "-pix_fmt", \
+                        "yuv420p", "-acodec", "aac", "-ab", ab, filename + newName + ".mp4"
+        elif hwacc == 'h264_videotoolbox':
+            cmd = "ffmpeg", "-i", path, "-c:v", 'h264_videotoolbox', "-profile:v", "high", "-preset:v", preset, "-level", level, "-b:v", bitrates, "-pix_fmt", \
+                        "yuv420p", "-acodec", "aac", "-ab", ab, filename + newName + ".mp4"
         else:
-            cmd = "ffmpeg", "-i", path, "-c:v", "libx264", "-profile:v", profile, "-preset:v", preset, "-level", level, "-tune", tune, "-crf", crf, "-pix_fmt", \
-                "yuv420p", "-acodec", "aac", "-ab", ab, filename + newName + ".mp4"
+            cmd = "ffmpeg", "-i", path, "-c:v", 'libx264', "-profile:v", "high", "-preset:v", preset, "-level", level, "-tune", tune, "-b:v", bitrates, "-pix_fmt", \
+                        "yuv420p", "-acodec", "aac", "-ab", ab, filename + newName + ".mp4"
         cmd = ' '.join(cmd)
         self.cmds.append(cmd)
         self.files.append(filename + newName + ".mp4")
         self.runcode()
 
     def newVer(self, version_URL):
-        self.ver.clear()
 
         def checkVer(version_URL):
             res = r"version:\s\d\.\d"
@@ -329,7 +340,7 @@ if __name__ == '__main__':
         如果您有任何问题及建议，非常期待您的反馈。\n
         '''
 
-    version = 'version: 2.2'
+    version = 'version: 3.0'
     version_URL = 'https://gitee.com/wbs21/lrconvert/blob/master/version.md'
     home_URL = 'https://gitee.com/wbs21/lrconvert/tree/master'
     app = QApplication(sys.argv)

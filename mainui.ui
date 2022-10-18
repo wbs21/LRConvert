@@ -7,7 +7,7 @@
     <x>0</x>
     <y>0</y>
     <width>800</width>
-    <height>600</height>
+    <height>599</height>
    </rect>
   </property>
   <property name="windowTitle">
@@ -586,6 +586,33 @@
           </widget>
          </item>
          <item>
+          <spacer name="horizontalSpacer_7">
+           <property name="orientation">
+            <enum>Qt::Horizontal</enum>
+           </property>
+           <property name="sizeHint" stdset="0">
+            <size>
+             <width>40</width>
+             <height>20</height>
+            </size>
+           </property>
+          </spacer>
+         </item>
+         <item>
+          <widget class="QLabel" name="label_21">
+           <property name="text">
+            <string>选择编码器：</string>
+           </property>
+          </widget>
+         </item>
+         <item>
+          <widget class="QComboBox" name="T5hwacc">
+           <property name="layoutDirection">
+            <enum>Qt::RightToLeft</enum>
+           </property>
+          </widget>
+         </item>
+         <item>
           <spacer name="horizontalSpacer_6">
            <property name="orientation">
             <enum>Qt::Horizontal</enum>
@@ -616,14 +643,14 @@
           <item>
            <widget class="QLabel" name="T5info_2">
             <property name="text">
-             <string>1080P 视频压缩，推荐4-12Mbp/s。</string>
+             <string>1080P 视频压缩，推荐4-12Mbp/s。4K 视频压缩，推荐12-20Mbp/s。</string>
             </property>
            </widget>
           </item>
           <item>
            <widget class="QLabel" name="T5info_3">
             <property name="text">
-             <string>4K 视频压缩，推荐12-20Mbp/s。</string>
+             <string>libx264为软编码器，兼容性好。N卡用户可选择nvenc，苹果Mac用户可选择videotoolbox。硬编码器质量接近，速度更快。</string>
             </property>
            </widget>
           </item>
@@ -667,7 +694,7 @@
       </attribute>
       <layout class="QHBoxLayout" name="horizontalLayout_18">
        <item>
-        <layout class="QVBoxLayout" name="verticalLayout_23" stretch="0,1,0,3">
+        <layout class="QVBoxLayout" name="verticalLayout_23" stretch="1,1,1,1,1,8">
          <item>
           <spacer name="verticalSpacer_20">
            <property name="orientation">
@@ -716,6 +743,20 @@
           </spacer>
          </item>
          <item>
+          <widget class="QLabel" name="label_10">
+           <property name="text">
+            <string>1080P 视频压缩，推荐4-12Mbp/s。4K 视频压缩，推荐12-20Mbp/s。</string>
+           </property>
+          </widget>
+         </item>
+         <item>
+          <widget class="QLabel" name="label_8">
+           <property name="text">
+            <string>libx264为软编码器，兼容性好。N卡用户可选择nvenc，苹果Mac用户可选择videotoolbox。硬编码器质量接近，速度更快。</string>
+           </property>
+          </widget>
+         </item>
+         <item>
           <layout class="QHBoxLayout" name="horizontalLayout_17" stretch="1,5">
            <item>
             <widget class="QLabel" name="label_19">
@@ -729,7 +770,7 @@
              <item row="0" column="0">
               <widget class="QGroupBox" name="groupBox_5">
                <property name="title">
-                <string>画面质量：</string>
+                <string>压缩器：</string>
                </property>
                <layout class="QVBoxLayout" name="verticalLayout_16">
                 <item>
@@ -765,7 +806,7 @@
              <item row="1" column="0">
               <widget class="QGroupBox" name="groupBox_8">
                <property name="title">
-                <string>视频类别：</string>
+                <string>视频类型：</string>
                </property>
                <layout class="QVBoxLayout" name="verticalLayout_19">
                 <item>
@@ -777,7 +818,7 @@
              <item row="1" column="1">
               <widget class="QGroupBox" name="groupBox_9">
                <property name="title">
-                <string>压缩等级（数字越大，文件越小）：</string>
+                <string>视频码率：</string>
                </property>
                <layout class="QVBoxLayout" name="verticalLayout_20">
                 <item>

@@ -24,7 +24,7 @@ class Ui_Form(object):
     def setupUi(self, Form):
         if not Form.objectName():
             Form.setObjectName(u"Form")
-        Form.resize(800, 600)
+        Form.resize(800, 599)
         self.verticalLayout = QVBoxLayout(Form)
         self.verticalLayout.setObjectName(u"verticalLayout")
         self.tabWidget = QTabWidget(Form)
@@ -401,6 +401,21 @@ class Ui_Form(object):
 
         self.horizontalLayout_13.addWidget(self.label_20)
 
+        self.horizontalSpacer_7 = QSpacerItem(40, 20, QSizePolicy.Expanding, QSizePolicy.Minimum)
+
+        self.horizontalLayout_13.addItem(self.horizontalSpacer_7)
+
+        self.label_21 = QLabel(self.T5)
+        self.label_21.setObjectName(u"label_21")
+
+        self.horizontalLayout_13.addWidget(self.label_21)
+
+        self.T5hwacc = QComboBox(self.T5)
+        self.T5hwacc.setObjectName(u"T5hwacc")
+        self.T5hwacc.setLayoutDirection(Qt.RightToLeft)
+
+        self.horizontalLayout_13.addWidget(self.T5hwacc)
+
         self.horizontalSpacer_6 = QSpacerItem(40, 20, QSizePolicy.Expanding, QSizePolicy.Minimum)
 
         self.horizontalLayout_13.addItem(self.horizontalSpacer_6)
@@ -491,6 +506,16 @@ class Ui_Form(object):
 
         self.verticalLayout_23.addItem(self.verticalSpacer_19)
 
+        self.label_10 = QLabel(self.T6)
+        self.label_10.setObjectName(u"label_10")
+
+        self.verticalLayout_23.addWidget(self.label_10)
+
+        self.label_8 = QLabel(self.T6)
+        self.label_8.setObjectName(u"label_8")
+
+        self.verticalLayout_23.addWidget(self.label_8)
+
         self.horizontalLayout_17 = QHBoxLayout()
         self.horizontalLayout_17.setObjectName(u"horizontalLayout_17")
         self.label_19 = QLabel(self.T6)
@@ -580,8 +605,12 @@ class Ui_Form(object):
 
         self.verticalLayout_23.addLayout(self.horizontalLayout_17)
 
+        self.verticalLayout_23.setStretch(0, 1)
         self.verticalLayout_23.setStretch(1, 1)
-        self.verticalLayout_23.setStretch(3, 3)
+        self.verticalLayout_23.setStretch(2, 1)
+        self.verticalLayout_23.setStretch(3, 1)
+        self.verticalLayout_23.setStretch(4, 1)
+        self.verticalLayout_23.setStretch(5, 8)
 
         self.horizontalLayout_18.addLayout(self.verticalLayout_23)
 
@@ -702,21 +731,24 @@ class Ui_Form(object):
         self.T5start.setText(QCoreApplication.translate("Form", u"\u5f00\u59cb\u7f16\u7801", None))
         self.label_17.setText(QCoreApplication.translate("Form", u"\u9009\u62e9\u7f16\u7801\u7801\u7387\uff1a", None))
         self.label_20.setText(QCoreApplication.translate("Form", u"Mbp/s", None))
+        self.label_21.setText(QCoreApplication.translate("Form", u"\u9009\u62e9\u7f16\u7801\u5668\uff1a", None))
         self.T5stop.setText(QCoreApplication.translate("Form", u"\u505c\u6b62\u7f16\u7801", None))
         self.groupBox_11.setTitle(QCoreApplication.translate("Form", u"\u7801\u7387\u63a8\u8350\uff1a", None))
-        self.T5info_2.setText(QCoreApplication.translate("Form", u"1080P \u89c6\u9891\u538b\u7f29\uff0c\u63a8\u83504-12Mbp/s\u3002", None))
-        self.T5info_3.setText(QCoreApplication.translate("Form", u"4K \u89c6\u9891\u538b\u7f29\uff0c\u63a8\u835012-20Mbp/s\u3002", None))
+        self.T5info_2.setText(QCoreApplication.translate("Form", u"1080P \u89c6\u9891\u538b\u7f29\uff0c\u63a8\u83504-12Mbp/s\u30024K \u89c6\u9891\u538b\u7f29\uff0c\u63a8\u835012-20Mbp/s\u3002", None))
+        self.T5info_3.setText(QCoreApplication.translate("Form", u"libx264\u4e3a\u8f6f\u7f16\u7801\u5668\uff0c\u517c\u5bb9\u6027\u597d\u3002N\u5361\u7528\u6237\u53ef\u9009\u62e9nvenc\uff0c\u82f9\u679cMac\u7528\u6237\u53ef\u9009\u62e9videotoolbox\u3002\u786c\u7f16\u7801\u5668\u8d28\u91cf\u63a5\u8fd1\uff0c\u901f\u5ea6\u66f4\u5feb\u3002", None))
         self.groupBox_4.setTitle(QCoreApplication.translate("Form", u"\u5f85\u7f16\u7801\u6587\u4ef6\u6570\u91cf", None))
         self.T5info.setText("")
         self.tabWidget.setTabText(self.tabWidget.indexOf(self.T5), QCoreApplication.translate("Form", u"\u6279\u91cf\u538b\u7f29", None))
         self.label_18.setText(QCoreApplication.translate("Form", u"\u9009\u62e9\u89c6\u9891\u6587\u4ef6\uff1a", None))
         self.T6add.setText(QCoreApplication.translate("Form", u"\u6d4f\u89c8", None))
+        self.label_10.setText(QCoreApplication.translate("Form", u"1080P \u89c6\u9891\u538b\u7f29\uff0c\u63a8\u83504-12Mbp/s\u30024K \u89c6\u9891\u538b\u7f29\uff0c\u63a8\u835012-20Mbp/s\u3002", None))
+        self.label_8.setText(QCoreApplication.translate("Form", u"libx264\u4e3a\u8f6f\u7f16\u7801\u5668\uff0c\u517c\u5bb9\u6027\u597d\u3002N\u5361\u7528\u6237\u53ef\u9009\u62e9nvenc\uff0c\u82f9\u679cMac\u7528\u6237\u53ef\u9009\u62e9videotoolbox\u3002\u786c\u7f16\u7801\u5668\u8d28\u91cf\u63a5\u8fd1\uff0c\u901f\u5ea6\u66f4\u5feb\u3002", None))
         self.label_19.setText(QCoreApplication.translate("Form", u"\u9009\u62e9\u538b\u7f29\u9009\u9879\uff1a", None))
-        self.groupBox_5.setTitle(QCoreApplication.translate("Form", u"\u753b\u9762\u8d28\u91cf\uff1a", None))
+        self.groupBox_5.setTitle(QCoreApplication.translate("Form", u"\u538b\u7f29\u5668\uff1a", None))
         self.groupBox_6.setTitle(QCoreApplication.translate("Form", u"\u7f16\u7801\u901f\u5ea6\uff1a", None))
         self.groupBox_7.setTitle(QCoreApplication.translate("Form", u"\u7f16\u7801\u7b49\u7ea7\uff1a", None))
-        self.groupBox_8.setTitle(QCoreApplication.translate("Form", u"\u89c6\u9891\u7c7b\u522b\uff1a", None))
-        self.groupBox_9.setTitle(QCoreApplication.translate("Form", u"\u538b\u7f29\u7b49\u7ea7\uff08\u6570\u5b57\u8d8a\u5927\uff0c\u6587\u4ef6\u8d8a\u5c0f\uff09\uff1a", None))
+        self.groupBox_8.setTitle(QCoreApplication.translate("Form", u"\u89c6\u9891\u7c7b\u578b\uff1a", None))
+        self.groupBox_9.setTitle(QCoreApplication.translate("Form", u"\u89c6\u9891\u7801\u7387\uff1a", None))
         self.groupBox_10.setTitle(QCoreApplication.translate("Form", u"\u97f3\u9891\u7801\u7387\uff1a", None))
         self.T6start.setText(QCoreApplication.translate("Form", u"\u5f00\u59cb\u7f16\u7801", None))
         self.T6stop.setText(QCoreApplication.translate("Form", u"\u505c\u6b62\u7f16\u7801", None))
