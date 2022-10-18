@@ -267,7 +267,7 @@ class mainWindow(QWidget, Ui_Form):
         for i in range(len(self.files)):
             filename = self.files[i]
             if hwacc == 'h264_nvenc':
-                cmd = "ffmpeg", "-i", filename, "-c:v", 'h264_nvenc', "-profile:v", "high", "-preset:v", "fast", "-level", "5.1", "-b:v", bitrates, \
+                cmd = "ffmpeg", "-i", filename, "-c:v", 'h264_nvenc', "-profile:v", "high", "-coder", "cabac", "-preset:v", "fast", "-level", "5.1", "-b:v", bitrates, \
                 "-bufsize", "2000k", "-pix_fmt", "yuv420p", "-acodec", "aac", "-ab", "128k", filename + newName + ".mp4"
             elif hwacc == 'h264_videotoolbox':
                 cmd = "ffmpeg", "-i", filename, "-c:v", 'h264_videotoolbox', "-profile:v", "high", "-preset:v", "fast", "-level", "5.1", "-b:v", bitrates, \
@@ -293,7 +293,7 @@ class mainWindow(QWidget, Ui_Form):
         bitrates = f'{self.T6level.currentText()}000k'
         ab = f"{str(self.T6audio.currentText())}k"
         if hwacc == 'h264_nvenc':
-            cmd = "ffmpeg", "-i", path, "-c:v", 'h264_nvenc', "-profile:v", "high", "-preset:v", preset, "-level", "5.1", "-b:v", bitrates, "-pix_fmt", \
+            cmd = "ffmpeg", "-i", path, "-c:v", 'h264_nvenc', "-profile:v", "high", "-coder", "cabac", "-preset:v", preset, "-level", "5.1", "-b:v", bitrates, "-pix_fmt", \
                         "yuv420p", "-acodec", "aac", "-ab", ab, filename + newName + ".mp4"
         elif hwacc == 'h264_videotoolbox':
             cmd = "ffmpeg", "-i", path, "-c:v", 'h264_videotoolbox', "-profile:v", "high", "-preset:v", preset, "-level", level, "-b:v", bitrates, "-pix_fmt", \
