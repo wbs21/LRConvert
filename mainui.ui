@@ -818,7 +818,7 @@
              <item row="1" column="1">
               <widget class="QGroupBox" name="groupBox_9">
                <property name="title">
-                <string>视频码率：</string>
+                <string>视频码率Mbp/s：</string>
                </property>
                <layout class="QVBoxLayout" name="verticalLayout_20">
                 <item>
@@ -830,7 +830,7 @@
              <item row="1" column="2">
               <widget class="QGroupBox" name="groupBox_10">
                <property name="title">
-                <string>音频码率：</string>
+                <string>音频码率kbp/s：</string>
                </property>
                <layout class="QVBoxLayout" name="verticalLayout_21">
                 <item>
