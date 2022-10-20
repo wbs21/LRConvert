@@ -333,10 +333,12 @@ if __name__ == '__main__':
     audioFile = '音频文件(*.aac *.wav *.mp3 *.ac3 *.m4a *.mov)'
     aboutTxt = '''
         如果转码出错，请先查看文件名或文件夹名称中是否有空格，如果有，请删除其中空格。\n
-        Little Rabbit Convert的所有功能完全依赖于FFMPEG。如果您使用windows系统，并且没有安装过FFMPEG。
-        那么请将本压缩包中的ffmpeg.exe文件，拷贝到Little Rabbit Convert的同一文件夹下，本工具才能正常使用。
+        Little Rabbit Convert的所有功能完全依赖于FFMPEG。如果您使用windows系统，
+        并且没有安装过FFMPEG。那么请将本压缩包中的ffmpeg.exe文件，
+        拷贝到Little Rabbit Convert的同一文件夹下，本工具才能正常使用。
         MacOs系统则需要使用homebrew安装ffmpeg。\n
-        推荐使用显卡硬件编码器，能大幅提升转码速度，N卡用户可使用h264_nvenc，MacOs用户可使用h264_videotoolbox。\n
+        推荐使用显卡硬件编码器，能大幅提升转码速度，Windows N卡用户可使用h264_nvenc，
+        MacOs用户可使用h264_videotoolbox。\n
         '''
 
     version = 'version: 3.0'
