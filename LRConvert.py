@@ -106,7 +106,7 @@ class mainWindow(QWidget, Ui_Form):
         self.T5start.clicked.connect(self.batCode)
         self.T5stop.clicked.connect(self.stopcode)
         self.T5add.clicked.connect(self.browseDir)
-        self.T5bit.addItems(['2', '4', '8', '10', '12', '16', '20'])
+        self.T5bit.addItems(['2', '4', '8', '12', '16', '20', '30'])
         self.T5bit.setCurrentIndex(2)
         self.T5hwacc.addItems(['libx264', 'h264_nvenc', 'h264_videotoolbox'])
         self.T5hwacc.setCurrentIndex(0)
@@ -332,11 +332,11 @@ if __name__ == '__main__':
     videoFile = '视频文件(*.mp4 *.m4v *.mkv *.mts *.avi *.mov *.mpg *.flv *.dat *.wmv *.rm *.rmvb *.mpeg *.3gp *.mxf)'
     audioFile = '音频文件(*.aac *.wav *.mp3 *.ac3 *.m4a *.mov)'
     aboutTxt = '''
-        小兔子转换器 (Little Rabbit Convert) 是为了方便使用FFMPEG而设计的一个简易的FFMPEG图形界面（GUI）。\n
+        如果转码出错，请先查看文件名或文件夹名称中是否有空格，如果有，请删除其中空格。\n
         Little Rabbit Convert的所有功能完全依赖于FFMPEG。如果您使用windows系统，并且没有安装过FFMPEG。
         那么请将本压缩包中的ffmpeg.exe文件，拷贝到Little Rabbit Convert的同一文件夹下，本工具才能正常使用。
         MacOs系统则需要使用homebrew安装ffmpeg。\n
-        Little Rabbit Convert的前四项功能，因为不重新编码，所以速度极快，而且不会带来质量损失。\n
+        推荐使用显卡硬件编码器，能大幅提升转码速度，N卡用户可使用h264_nvenc，MacOs用户可使用h264_videotoolbox。\n
         '''
 
     version = 'version: 3.0'
