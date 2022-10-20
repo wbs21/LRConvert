@@ -342,8 +342,9 @@ if __name__ == '__main__':
         '''
 
     version = 'version: 3.0'
-    version_URL = 'https://gitee.com/wbs21/lrconvert/blob/main/version.md'
-    home_URL = 'https://gitee.com/wbs21/lrconvert/
+    version_URL = 'https://gitee.com/wbs21/lrconvert/blob/master/version.md'
+    home_URL = 'https://gitee.com/wbs21/lrconvert/tree/master'
+    app = QApplication(sys.argv)
     window = mainWindow()
     window.show()
     app.exec()
