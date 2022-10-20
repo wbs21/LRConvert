@@ -268,13 +268,13 @@ class mainWindow(QWidget, Ui_Form):
             filename = self.files[i]
             if hwacc == 'h264_nvenc':
                 cmd = "ffmpeg", "-i", filename, "-c:v", 'h264_nvenc', "-profile:v", "high", "-coder", "cabac", "-preset:v", "fast", "-level", "5.1", "-b:v", bitrates, \
-                "-bufsize", "2000k", "-pix_fmt", "yuv420p", "-acodec", "aac", "-ab", "128k", filename + newName + ".mp4"
+                    "-bufsize", "2000k", "-pix_fmt", "yuv420p", "-acodec", "aac", "-ab", "128k", filename + newName + ".mp4"
             elif hwacc == 'h264_videotoolbox':
                 cmd = "ffmpeg", "-i", filename, "-c:v", 'h264_videotoolbox', "-profile:v", "high", "-preset:v", "fast", "-level", "5.1", "-b:v", bitrates, \
-                "-bufsize", "2000k", "-pix_fmt", "yuv420p", "-acodec", "aac", "-ab", "128k", filename + newName + ".mp4"
+                    "-bufsize", "2000k", "-pix_fmt", "yuv420p", "-acodec", "aac", "-ab", "128k", filename + newName + ".mp4"
             else:
                 cmd = "ffmpeg", "-i", filename, "-c:v", 'libx264', "-profile:v", "high", "-preset:v", "fast", "-level", "4.1", "-b:v", bitrates, \
-                "-bufsize", "2000k", "-pix_fmt", "yuv420p", "-acodec", "aac", "-ab", "128k", filename + newName + ".mp4"
+                    "-bufsize", "2000k", "-pix_fmt", "yuv420p", "-acodec", "aac", "-ab", "128k", filename + newName + ".mp4"
             cmd = ' '.join(cmd)
             self.cmds.append(cmd)
             self.files.append(filename + newName + ".mp4")

@@ -756,7 +756,7 @@ class Ui_Form(object):
         self.T7this.setText(QCoreApplication.translate("Form", u"\u5f53\u524d\u7248\u672c\uff1a", None))
         self.T7new.setText(QCoreApplication.translate("Form", u"\u6700\u65b0\u7248\u672c\uff1a", None))
         self.T7check.setText(QCoreApplication.translate("Form", u"\u67e5\u770b\u7248\u672c\u4fe1\u606f", None))
-        self.tabWidget.setTabText(self.tabWidget.indexOf(self.T7), QCoreApplication.translate("Form", u"\u5173    \u4e8e", None))
+        self.tabWidget.setTabText(self.tabWidget.indexOf(self.T7), QCoreApplication.translate("Form", u"\u63d0    \u793a", None))
         self.groupBox.setTitle(QCoreApplication.translate("Form", u"\u8f6c\u7801\u8fdb\u5ea6\u4fe1\u606f", None))
     # retranslateUi
 

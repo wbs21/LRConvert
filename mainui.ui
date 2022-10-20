@@ -867,7 +867,7 @@
      </widget>
      <widget class="QWidget" name="T7">
       <attribute name="title">
-       <string>关    于</string>
+       <string>提    示</string>
       </attribute>
       <layout class="QHBoxLayout" name="horizontalLayout_6" stretch="4,1">
        <item>
