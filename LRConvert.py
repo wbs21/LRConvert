@@ -329,8 +329,8 @@ class mainWindow(QWidget, Ui_Form):
 
 if __name__ == '__main__':
     videoFile2 = ['.mp4', '.m4v', '.mkv', '.mts', '.avi', '.mov', '.mpg', '.flv', '.dat', '.wmv', '.rm', '.rmvb', '.mpeg', '.3gp', '.mxf']
-    videoFile = '视频文件(*.mp4 *.m4v *.mkv *.mts *.avi *.mov *.mpg *.flv *.dat *.wmv *.rm *.rmvb *.mpeg *.3gp *.mxf)'
-    audioFile = '音频文件(*.aac *.wav *.mp3 *.ac3 *.m4a *.mov)'
+    videoFile = '视频文件(*.mp4 *.m4v *.mkv *.mts *.avi *.mov *.mpg *.flv *.dat *.wmv *.rm *.rmvb *.mpeg *.3gp *.mxf *.m4s)'
+    audioFile = '音频文件(*.aac *.wav *.mp3 *.ac3 *.m4a *.mov *.m4s)'
     aboutTxt = '''
         如果转码出错，请先查看文件名或文件夹名称中是否有空格，如果有，请删除其中空格。\n
         Little Rabbit Convert的所有功能完全依赖于FFMPEG。如果您使用windows系统，
@@ -341,7 +341,7 @@ if __name__ == '__main__':
         MacOs用户可使用h264_videotoolbox。\n
         '''
 
-    version = 'version: 3.0'
+    version = 'version: 3.1'
     version_URL = 'https://gitee.com/wbs21/lrconvert/blob/main/version.md'
     home_URL = 'https://gitee.com/wbs21/lrconvert/'
     app = QApplication(sys.argv)
