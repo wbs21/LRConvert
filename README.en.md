@@ -36,8 +36,8 @@ v 1.0.0:
 
 #### 软件下载地址
 
-链接：https://pan.baidu.com/s/1dGx04xZ-LoiZwMHB3KheOQ 
-提取码：sxmf 
+链接：链接：https://pan.baidu.com/s/1dGx04xZ-LoiZwMHB3KheOQ?pwd=sxmf
+
 
 
 注意： Mac版本必须首先在系统中安装好ffmpeg才能使用。Mac系统安装ffmpeg较为复杂，具体请参考“Mac系统安装ffmpeg说明.md”文中的步骤。
@@ -58,4 +58,9 @@ Little Rabbit Convert的所有功能完全依赖于FFMPEG。因此您的系统�
 
 1.  本软件为绿色免安装版。
 2.  将压缩包解压到本地，打开LRConvert.exe文件即可使用。
-3.  Little Rabbit Convert的前四项功能，因为不重新编码，所以速度极快，而且不会带来质量损失。
+
+
+#### 使用说明
+
+1.  Little Rabbit Convert的前四项功能，因为不重新编码，所以速度极快，而且不会带来质量损失。
+
