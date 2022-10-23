@@ -64,9 +64,3 @@ Little Rabbit Convert的所有功能完全依赖于FFMPEG。因此您的系统�
 
 1.  Little Rabbit Convert的前四项功能，因为不重新编码，所以速度极快，而且不会带来质量损失。
 
-
-#### 测试说明
-
-Little Rabbit Convert还处于最初开发版本，无可避免有很多的bug和功能缺陷，
-如果您有任何问题及建议，非常期待您的反馈。
-您可以点击上方的版本信息链接，在页面下方进行留言。
