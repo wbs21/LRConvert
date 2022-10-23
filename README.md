@@ -2,7 +2,7 @@
 
 #### 软件下载地址
 
-链接：https://pan.baidu.com/s/1dGx04xZ-LoiZwMHB3KheOQ 
+链接：https://pan.baidu.com/s/1dGx04xZ-LoiZwMHB3KheOQ?pwd=sxmf 
 提取码：sxmf 
 
 
