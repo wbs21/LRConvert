@@ -15,4 +15,4 @@ brew安装完成后，就可以用brew来安装ffmpeg
 
 `brew install ffmpeg`
 
-ffmpeg安装完成后，输入以下命令，查看ffmeg版本，如果显示正常，则表示ffmpeg安装成功了！
+ffmpeg安装完成后，输入ffmpeg回车，可以看到ffmeg可以正常运行的多行提示，则表示ffmpeg安装成功了！
