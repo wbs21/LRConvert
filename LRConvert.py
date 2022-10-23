@@ -336,7 +336,8 @@ if __name__ == '__main__':
         Little Rabbit Convert的所有功能完全依赖于FFMPEG。如果您使用windows系统，
         并且没有安装过FFMPEG。那么请将本压缩包中的ffmpeg.exe文件，
         拷贝到Little Rabbit Convert的同一文件夹下，本工具才能正常使用。
-        MacOs系统则需要使用homebrew安装ffmpeg。\n
+        MacOs系统则需要使用homebrew安装ffmpeg。Mac安装ffmpeg较为复杂，可参考一下链接教程\n
+        https://gitee.com/wbs21/lrconvert\n
         推荐使用显卡硬件编码器，能大幅提升转码速度，Windows N卡用户可使用h264_nvenc，
         MacOs用户可使用h264_videotoolbox。\n
         '''
