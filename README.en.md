@@ -58,9 +58,4 @@ Little Rabbit Convert的所有功能完全依赖于FFMPEG。因此您的系统�
 
 1.  本软件为绿色免安装版。
 2.  将压缩包解压到本地，打开LRConvert.exe文件即可使用。
-
-
-#### 使用说明
-
-1.  Little Rabbit Convert的前四项功能，因为不重新编码，所以速度极快，而且不会带来质量损失。
-
+3.  Little Rabbit Convert的前四项功能，因为不重新编码，所以速度极快，而且不会带来质量损失。
