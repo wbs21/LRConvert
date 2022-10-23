@@ -1,7 +1,6 @@
 #### 软件下载地址
 
-链接：https://pan.baidu.com/s/1dGx04xZ-LoiZwMHB3KheOQ?pwd=sxmf 
-提取码：sxmf 
+链接：https://pan.baidu.com/s/1dGx04xZ-LoiZwMHB3KheOQ?pwd=sxmf
 
 #### 安装ffmpeg帮助说明
 
@@ -18,11 +17,9 @@ Mac安装ffmpeg的主要难点在于第一步，安装brew，因为brew的服务
 
 `/bin/zsh -c "$(curl -fsSL https://gitee.com/cunkai/HomebrewCN/raw/master/Homebrew.sh)"`
 
-
-脚本运行后，会要求先选择软件源，个人使用的清华源，所有输入2回车。
+脚本运行后，会要求先选择软件源，个人使用的清华源，输入2回车。
 然后会要求输入开机密码，输入时没有显示，输入完按回车键开始安装。
 如果系统没有安装过git，安装自动会跳出git安装程序，安装完成后请重新从头开始安装brew。
-
 
 brew安装完成后，就可以用brew来安装ffmpeg
 
@@ -72,11 +69,12 @@ v 1.0.0:
 Little Rabbit Convert 小兔子转换器 (Little Rabbit Convert) 是为了方便使用FFMPEG而设计的一个简易的FFMPEG图形界面（GUI）。
 
 #### 软件说明
+
 Little Rabbit Convert的所有功能完全依赖于FFMPEG。因此您的系统中如果没有安装过FFMPEG,
 那么请将本压缩包中的ffmpeg.exe文件，拷贝到Little Rabbit Convert的同一文件夹下，本工具才能正常使用。
 
 #### 安装说明
 
-1.  本软件为绿色免安装版。
-2.  将压缩包解压到本地，打开LRConvert.exe文件即可使用。
-3.  Little Rabbit Convert的前四项功能，因为不重新编码，所以速度极快，而且不会带来质量损失。
+1. 本软件为绿色免安装版。
+2. 将压缩包解压到本地，打开LRConvert.exe文件即可使用。
+3. Little Rabbit Convert的前四项功能，因为不重新编码，所以速度极快，而且不会带来质量损失。
