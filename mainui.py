@@ -744,7 +744,7 @@ class Ui_Form(object):
         self.label_10.setText(QCoreApplication.translate("Form", u"1080P \u89c6\u9891\u538b\u7f29\uff0c\u63a8\u83504-12Mbp/s\u30024K \u89c6\u9891\u538b\u7f29\uff0c\u63a8\u835012-20Mbp/s\u3002", None))
         self.label_8.setText(QCoreApplication.translate("Form", u"libx264\u4e3a\u8f6f\u7f16\u7801\u5668\uff0c\u517c\u5bb9\u6027\u597d\u3002N\u5361\u7528\u6237\u53ef\u9009\u62e9nvenc\uff0c\u82f9\u679cMac\u7528\u6237\u53ef\u9009\u62e9videotoolbox\u3002\u786c\u7f16\u7801\u5668\u8d28\u91cf\u63a5\u8fd1\uff0c\u901f\u5ea6\u66f4\u5feb\u3002", None))
         self.label_19.setText(QCoreApplication.translate("Form", u"\u9009\u62e9\u538b\u7f29\u9009\u9879\uff1a", None))
-        self.groupBox_5.setTitle(QCoreApplication.translate("Form", u"\u538b\u7f29\u5668\uff1a", None))
+        self.groupBox_5.setTitle(QCoreApplication.translate("Form", u"\u7f16\u7801\u5668\uff1a", None))
         self.groupBox_6.setTitle(QCoreApplication.translate("Form", u"\u7f16\u7801\u901f\u5ea6\uff1a", None))
         self.groupBox_7.setTitle(QCoreApplication.translate("Form", u"\u7f16\u7801\u7b49\u7ea7\uff1a", None))
         self.groupBox_8.setTitle(QCoreApplication.translate("Form", u"\u89c6\u9891\u7c7b\u578b\uff1a", None))

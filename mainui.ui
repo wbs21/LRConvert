@@ -770,7 +770,7 @@
              <item row="0" column="0">
               <widget class="QGroupBox" name="groupBox_5">
                <property name="title">
-                <string>压缩器：</string>
+                <string>编码器：</string>
                </property>
                <layout class="QVBoxLayout" name="verticalLayout_16">
                 <item>
