@@ -164,8 +164,6 @@ class mainWindow(QWidget, Ui_Form):
         cmd = ' '.join(cmd)
         self.cmds.append(cmd)
         self.files.append(filename + newName + filetype)
-        print(self.cmds)
-        print(self.files)
         self.runcode()
 
     def runcode(self):
