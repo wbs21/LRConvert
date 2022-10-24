@@ -7,7 +7,7 @@
 LRConvert只是一个ffmpeg的用户界面，必须配合ffmpeg使用。
 windows只需将LRConvert和ffmpeg放到一个文件夹中即可。
 
-Mac版本必须首先在系统中安装好ffmpeg才能使用。Mac系统安装ffmpeg较为复杂，可参考一下步骤。
+Mac版本必须首先在系统中安装好ffmpeg才能使用。Mac系统安装ffmpeg较为复杂，可参考以下步骤。
 
 Mac安装ffmpeg的主要难点在于第一步，安装brew，因为brew的服务器在国外，所以经常第一步就超时出错。
 
