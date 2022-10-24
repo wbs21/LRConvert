@@ -7,7 +7,7 @@
 LRConvert只是一个ffmpeg的用户界面，必须配合ffmpeg使用。
 windows只需将LRConvert和ffmpeg放到一个文件夹中即可。
 
-Mac版本必须首先在系统中安装好ffmpeg才能使用。首先需要安卓homebrew，可参考以下步骤。
+Mac版本必须首先在系统中安装好ffmpeg才能使用。首先需要安装homebrew，可参考以下步骤。
 
 #### intel版 Mac安装brew
 
@@ -40,13 +40,13 @@ ffmpeg安装完成后，输入ffmpeg回车，可以看到ffmeg可以正常运行
 ```
 然后根据提示输入国内源，开机密码等。直到安装结束。
 
-安装结束后需要把brew默认目录改为/opt/homebrew，在终端中运行下面三行代码，每行输入完后回车：
+安装结束后需要把brew默认目录改为/opt/homebrew，brew才能正常运行。在终端中运行下面三行代码，每行输入完后回车：
 ```
 cd ~
 touch .zshrc
 open -e .zshrc
 ```
-在打开的文件中添加以下两行内容并保存：
+在打开的文件中添加以下两行内容，保存后退出：
 ```
 export PATH="/opt/homebrew/bin:$PATH"
 export PATH="/opt/homebrew/sbin:$PATH"
