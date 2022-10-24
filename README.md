@@ -7,19 +7,17 @@
 LRConvert只是一个ffmpeg的用户界面，必须配合ffmpeg使用。
 windows只需将LRConvert和ffmpeg放到一个文件夹中即可。
 
-Mac版本必须首先在系统中安装好ffmpeg才能使用。Mac系统安装ffmpeg较为复杂，可参考以下步骤。
+Mac版本必须首先在系统中安装好ffmpeg才能使用。首先需要安卓homebrew，可参考以下步骤。
 
-Mac安装ffmpeg的主要难点在于第一步，安装brew，因为brew的服务器在国外，所以经常第一步就超时出错。
+#### intel版 Mac安装brew
 
-下面使用国内镜像软件源，一键安装配置脚本。
+下面的简化方法使用国内镜像软件源，一键安装配置脚本。
 
 注：以下命令均在Mac终端窗口中进行：
 
 ```
 /bin/zsh -c "$(curl -fsSL https://gitee.com/cunkai/HomebrewCN/raw/master/Homebrew.sh)"
 ```
-
-
 
 脚本运行后，会要求先选择软件源，个人使用的清华源，输入2回车。
 然后会要求输入开机密码，输入时没有显示，输入完按回车键开始安装。
@@ -32,6 +30,45 @@ brew install ffmpeg
 ```
 
 ffmpeg安装完成后，输入ffmpeg回车，可以看到ffmeg可以正常运行的多行提示，则表示ffmpeg安装成功了！
+
+#### M1版 Mac安装brew
+
+可先通过app Store安装xcode,以备后续安装git需要。
+在终端中输入以下命令并回车运行
+```
+/bin/zsh -c "$(curl -fsSL https://gitee.com/huwei1024/HomebrewCN/raw/master/Homebrew.sh)"
+```
+然后根据提示输入国内源，开机密码等。直到安装结束。
+
+安装结束后需要把brew默认目录改为/opt/homebrew，通过以下操作：
+```
+cd ~
+touch .zshrc
+open -e .zshrc
+```
+在打开的文件中添加以下两行内容并保存：
+```
+export PATH="/opt/homebrew/bin:$PATH"
+export PATH="/opt/homebrew/sbin:$PATH"
+```
+然后在终端中运行以下语句,让刚才修改的环境变量启用：
+```
+source .zshrc
+```
+在终端中运行以下语句：
+```
+source .zshrc
+```
+应该看到brew已经安装成功。
+
+最后，在终端中运行以下代码安装ffmpeg:
+```
+brew install ffmpeg
+```
+安装完成后，在终端中运行ffmpeg，可以看到ffmpeg已经安装成功。
+```
+ffmpeg
+```
 
 #### 更新说明
 
