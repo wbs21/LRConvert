@@ -40,7 +40,7 @@ ffmpeg安装完成后，输入ffmpeg回车，可以看到ffmeg可以正常运行
 ```
 然后根据提示输入国内源，开机密码等。直到安装结束。
 
-安装结束后需要把brew默认目录改为/opt/homebrew，通过以下操作：
+安装结束后需要把brew默认目录改为/opt/homebrew，在终端中运行下面三行代码，每行输入完后回车：
 ```
 cd ~
 touch .zshrc
@@ -55,13 +55,11 @@ export PATH="/opt/homebrew/sbin:$PATH"
 ```
 source .zshrc
 ```
-在终端中运行以下语句：
+在终端中运行以下语句,可以查看brew是否成功运行：
 ```
-source .zshrc
+brew -v
 ```
-应该看到brew已经安装成功。
-
-最后，在终端中运行以下代码安装ffmpeg:
+最后，在终端中运行以下代码，安装ffmpeg:
 ```
 brew install ffmpeg
 ```
