@@ -290,7 +290,7 @@ class mainWindow(QWidget, Ui_Form):
         if hwacc == 'libx264':
             cmd = "ffmpeg", "-i", path, "-c:v", hwacc, "-profile:v", "high", "-preset:v", preset, "-level", level, "-tune", tune, "-b:v", bitrates, \
                 "-bufsize", "2000k", "-pix_fmt", "yuv420p", "-acodec", "aac", "-ab", ab, filename + newName + ".mp4"
-        else :
+        else:
             cmd = "ffmpeg", "-i", path, "-c:v", f'h264_{hwacc}', "-profile:v", "high", "-coder", "cabac", "-preset:v", preset, "-level", "5.1", "-b:v", bitrates, \
                 "-bufsize", "2000k", "-pix_fmt", "yuv420p", "-acodec", "aac", "-ab", ab, filename + newName + ".mp4"
         cmd = ' '.join(cmd)
