@@ -650,7 +650,7 @@
           <item>
            <widget class="QLabel" name="T5info_3">
             <property name="text">
-             <string>libx264为软编码器，兼容性好。N卡用户可选择nvenc，苹果Mac用户可选择videotoolbox。硬编码器质量接近，速度更快。</string>
+             <string>libx264为纯软件编码器，N卡加速选nvenc，intel集成显卡选qsv，A卡加速选amf，Mac显卡加速选videotoolbox。</string>
             </property>
            </widget>
           </item>
@@ -752,7 +752,7 @@
          <item>
           <widget class="QLabel" name="label_8">
            <property name="text">
-            <string>libx264为软编码器，兼容性好。N卡用户可选择nvenc，苹果Mac用户可选择videotoolbox。硬编码器质量接近，速度更快。</string>
+            <string>libx264为纯软件编码器，N卡加速选nvenc，intel集成显卡选qsv，A卡加速选amf，Mac显卡加速选videotoolbox。</string>
            </property>
           </widget>
          </item>

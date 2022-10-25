@@ -108,12 +108,12 @@ class mainWindow(QWidget, Ui_Form):
         self.T5add.clicked.connect(self.browseDir)
         self.T5bit.addItems(['1', '2', '4', '8', '12', '16', '20', '30'])
         self.T5bit.setCurrentIndex(2)
-        self.T5hwacc.addItems(['libx264', 'h264_nvenc', 'h264_videotoolbox'])
+        self.T5hwacc.addItems(['libx264', 'nvenc', 'qsv', 'amf', 'videotoolbox'])
         self.T5hwacc.setCurrentIndex(0)
         self.T6start.clicked.connect(self.selfCode)
         self.T6stop.clicked.connect(self.stopcode)
         self.T6add.clicked.connect(lambda: self.browsePath(6))
-        self.T6quality.addItems(['libx264', 'h264_nvenc', 'h264_videotoolbox'])
+        self.T6quality.addItems(['libx264', 'nvenc', 'qsv', 'amf', 'videotoolbox'])
         self.T6quality.setCurrentIndex(0)
         self.T6speed.addItems(['fast', 'medium', 'slow'])
         self.T6speed.setCurrentIndex(0)
@@ -264,14 +264,11 @@ class mainWindow(QWidget, Ui_Form):
         newName = f"_new_{str(int(time.time()))[4:]}"
         for i in range(len(self.files)):
             filename = self.files[i]
-            if hwacc == 'h264_nvenc':
-                cmd = "ffmpeg", "-i", filename, "-c:v", 'h264_nvenc', "-profile:v", "high", "-coder", "cabac", "-preset:v", "fast", "-level", "5.1", "-b:v", bitrates, \
-                    "-bufsize", "2000k", "-pix_fmt", "yuv420p", "-acodec", "aac", "-ab", "128k", filename + newName + ".mp4"
-            elif hwacc == 'h264_videotoolbox':
-                cmd = "ffmpeg", "-i", filename, "-c:v", 'h264_videotoolbox', "-profile:v", "high", "-preset:v", "fast", "-level", "5.1", "-b:v", bitrates, \
+            if hwacc == 'libx264':
+                cmd = "ffmpeg", "-i", filename, "-c:v", hwacc, "-profile:v", "high", "-preset:v", "fast", "-level", "4.1", "-b:v", bitrates, \
                     "-bufsize", "2000k", "-pix_fmt", "yuv420p", "-acodec", "aac", "-ab", "128k", filename + newName + ".mp4"
             else:
-                cmd = "ffmpeg", "-i", filename, "-c:v", 'libx264', "-profile:v", "high", "-preset:v", "fast", "-level", "4.1", "-b:v", bitrates, \
+                cmd = "ffmpeg", "-i", filename, "-c:v", f'h264_{hwacc}', "-profile:v", "high", "-coder", "cabac", "-preset:v", "fast", "-level", "5.1", "-b:v", bitrates, \
                     "-bufsize", "2000k", "-pix_fmt", "yuv420p", "-acodec", "aac", "-ab", "128k", filename + newName + ".mp4"
             cmd = ' '.join(cmd)
             self.cmds.append(cmd)
@@ -290,15 +287,12 @@ class mainWindow(QWidget, Ui_Form):
         tune = self.T6type.currentText()
         bitrates = f'{self.T6level.currentText()}000k'
         ab = f"{str(self.T6audio.currentText())}k"
-        if hwacc == 'h264_nvenc':
-            cmd = "ffmpeg", "-i", path, "-c:v", 'h264_nvenc', "-profile:v", "high", "-coder", "cabac", "-preset:v", preset, "-level", "5.1", "-b:v", bitrates, "-pix_fmt", \
-                        "yuv420p", "-acodec", "aac", "-ab", ab, filename + newName + ".mp4"
-        elif hwacc == 'h264_videotoolbox':
-            cmd = "ffmpeg", "-i", path, "-c:v", 'h264_videotoolbox', "-profile:v", "high", "-preset:v", preset, "-level", level, "-b:v", bitrates, "-pix_fmt", \
-                        "yuv420p", "-acodec", "aac", "-ab", ab, filename + newName + ".mp4"
-        else:
-            cmd = "ffmpeg", "-i", path, "-c:v", 'libx264', "-profile:v", "high", "-preset:v", preset, "-level", level, "-tune", tune, "-b:v", bitrates, "-pix_fmt", \
-                        "yuv420p", "-acodec", "aac", "-ab", ab, filename + newName + ".mp4"
+        if hwacc == 'libx264':
+            cmd = "ffmpeg", "-i", path, "-c:v", hwacc, "-profile:v", "high", "-preset:v", preset, "-level", level, "-tune", tune, "-b:v", bitrates, \
+                "-bufsize", "2000k", "-pix_fmt", "yuv420p", "-acodec", "aac", "-ab", ab, filename + newName + ".mp4"
+        else :
+            cmd = "ffmpeg", "-i", path, "-c:v", f'h264_{hwacc}', "-profile:v", "high", "-coder", "cabac", "-preset:v", preset, "-level", "5.1", "-b:v", bitrates, \
+                "-bufsize", "2000k", "-pix_fmt", "yuv420p", "-acodec", "aac", "-ab", ab, filename + newName + ".mp4"
         cmd = ' '.join(cmd)
         self.cmds.append(cmd)
         self.files.append(filename + newName + ".mp4")
@@ -331,16 +325,20 @@ if __name__ == '__main__':
     audioFile = '音频文件(*.aac *.wav *.mp3 *.ac3 *.m4a *.mov *.m4s)'
     aboutTxt = '''
         如果转码出错，请先查看文件名或文件夹名称中是否有空格，如果有，请删除其中空格。\n
+        然后查看所选电脑显卡是否支持所选硬件编码器。 \n
         Little Rabbit Convert的所有功能完全依赖于FFMPEG。如果您使用windows系统，
         并且没有安装过FFMPEG。那么请将本压缩包中的ffmpeg.exe文件，
         拷贝到Little Rabbit Convert的同一文件夹下，本工具才能正常使用。
         MacOs系统则需要使用homebrew安装ffmpeg。Mac安装ffmpeg较为复杂，可参考以下链接教程\n
         https://gitee.com/wbs21/lrconvert\n
-        推荐使用显卡硬件编码器，能大幅提升转码速度，Windows N卡用户可使用h264_nvenc，
+        推荐使用显卡硬件编码器，能大幅提升转码速度，
+        Windows N卡可使用nvenc编码器，
+        A卡可以使用amf编码器，
+        intel 核显可使用qsv编码器
         MacOs用户可使用h264_videotoolbox。\n
         '''
 
-    version = 'version: 3.1'
+    version = 'version: 3.2'
     version_URL = 'https://gitee.com/wbs21/lrconvert/blob/main/version.md'
     home_URL = 'https://gitee.com/wbs21/lrconvert/'
     app = QApplication(sys.argv)
