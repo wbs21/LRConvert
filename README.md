@@ -1,6 +1,6 @@
 #### 软件下载地址
 
-链接：https://pan.baidu.com/s/1dGx04xZ-LoiZwMHB3KheOQ?pwd=sxmf
+链接：<https://pan.baidu.com/s/1dGx04xZ-LoiZwMHB3KheOQ?pwd=sxmf>
 
 #### 安装ffmpeg帮助说明
 
@@ -35,35 +35,48 @@ ffmpeg安装完成后，输入ffmpeg回车，可以看到ffmeg可以正常运行
 
 可先通过app Store安装xcode,以备后续安装git需要。
 在终端中输入以下命令并回车运行
+
 ```
 /bin/zsh -c "$(curl -fsSL https://gitee.com/huwei1024/HomebrewCN/raw/master/Homebrew.sh)"
 ```
+
 然后根据提示输入国内源，开机密码等。直到安装结束。
 
 安装结束后需要把brew默认目录改为/opt/homebrew，brew才能正常运行。在终端中运行下面三行代码，每行输入完后回车：
+
 ```
 cd ~
 touch .zshrc
 open -e .zshrc
 ```
+
 在打开的文件中添加以下两行内容，保存后退出：
+
 ```
 export PATH="/opt/homebrew/bin:$PATH"
 export PATH="/opt/homebrew/sbin:$PATH"
 ```
+
 然后在终端中运行以下语句,让刚才修改的环境变量启用：
+
 ```
 source .zshrc
 ```
+
 在终端中运行以下语句,可以查看brew是否成功运行：
+
 ```
 brew -v
 ```
+
 最后，在终端中运行以下代码，安装ffmpeg:
+
 ```
 brew install ffmpeg
 ```
+
 安装完成后，在终端中运行ffmpeg，可以看到ffmpeg已经安装成功。
+
 ```
 ffmpeg
 ```
