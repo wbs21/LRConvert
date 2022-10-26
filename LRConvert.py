@@ -325,7 +325,7 @@ if __name__ == '__main__':
     audioFile = '音频文件(*.aac *.wav *.mp3 *.ac3 *.m4a *.mov *.m4s)'
     aboutTxt = '''
         如果转码出错，请先查看文件名或文件夹名称中是否有空格，如果有，请删除其中空格。\n
-        然后查看所选电脑显卡是否支持所选硬件编码器。 \n
+        查看所选电脑显卡是否支持所选硬件编码器,不确定就选择libx264编码器。 \n
         Little Rabbit Convert的所有功能完全依赖于FFMPEG。如果您使用windows系统，
         并且没有安装过FFMPEG。那么请将本压缩包中的ffmpeg.exe文件，
         拷贝到Little Rabbit Convert的同一文件夹下，本工具才能正常使用。
