@@ -160,7 +160,8 @@ class mainWindow(QWidget, Ui_Form):
         endtime = self.T1time2.text()
         newName = f"_new_{str(int(time.time()))[4:]}"
         filetype = '.' + filename.split('.')[-1]
-        cmd = "ffmpeg", "-ss", startTime, "-to", endtime, "-accurate_seek", "-i", filename, "-c", "copy", "-avoid_negative_ts", "1", "-y", filename + newName + filetype
+        # cmd = "ffmpeg", "-ss", startTime, "-to", endtime, "-accurate_seek", "-i", filename, "-c", "copy", "-avoid_negative_ts", "1", "-y", filename + newName + filetype
+        cmd = "ffmpeg", "-ss", startTime, "-to", endtime, "-i", filename, "-c", "copy", "-keyint_min", "2", "-g", "1", "-y", filename + newName + filetype
         cmd = ' '.join(cmd)
         self.cmds.append(cmd)
         self.files.append(filename + newName + filetype)
