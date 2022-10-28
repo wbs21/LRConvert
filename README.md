@@ -1,13 +1,40 @@
-#### 软件下载地址
+### 软件下载地址
 
 链接：<https://pan.baidu.com/s/1dGx04xZ-LoiZwMHB3KheOQ?pwd=sxmf>
 
-#### 安装ffmpeg帮助说明
+### 安装ffmpeg帮助说明
 
 LRConvert只是一个ffmpeg的用户界面，必须配合ffmpeg使用。
 windows只需将LRConvert和ffmpeg放到一个文件夹中即可。
 
-Mac版本必须首先在系统中安装好ffmpeg才能使用。首先需要安装homebrew，可参考以下步骤。
+### Mac安装ffmpeg
+
+1. 打开链接[static FFmpeg binaries for macOS 64-bit (evermeet.cx)](https://evermeet.cx/ffmpeg/)下载编译好的文件，解压缩后，拷贝到应用程序中，并运行一次。
+
+2. 配置环境变量，打开终端，依次运行以下命令: 
+
+   ```
+   touch .zshrc
+   open -e .zshrc
+   ```
+
+3.在打开的文件中添加下面一行
+
+```
+export PATH=$PATH:/Applications
+```
+
+4.关闭文件，然后在终端中输入以下并运行，让环境变量生效：
+
+```
+source .zshrc
+```
+
+5.在终端中输入ffmpeg并回车，查看ffmpeg是否能运行。
+
+#### Mac使用homebrew安装ffmpeg
+
+Mac安装homebrew，可参考以下步骤。
 
 #### intel版 Mac安装brew
 
