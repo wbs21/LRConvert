@@ -1,6 +1,6 @@
 ### 软件下载地址
 
-链接：<https://pan.baidu.com/s/1dGx04xZ-LoiZwMHB3KheOQ?pwd=sxmf>
+链接：[https://pan.baidu.com/s/1dGx04xZ-LoiZwMHB3KheOQ?pwd=sxmf](https://pan.baidu.com/s/1dGx04xZ-LoiZwMHB3KheOQ?pwd=sxmf)
 
 ### 安装ffmpeg帮助说明
 
@@ -10,8 +10,7 @@ windows只需将LRConvert和ffmpeg放到一个文件夹中即可。
 ### Mac安装ffmpeg
 
 1. 打开链接[static FFmpeg binaries for macOS 64-bit (evermeet.cx)](https://evermeet.cx/ffmpeg/)下载编译好的文件，解压缩后，拷贝到应用程序中，并运行一次。
-
-2. 配置环境变量，打开终端，依次运行以下命令: 
+2. 配置环境变量，打开终端，依次运行以下命令:
 
    ```
    touch .zshrc
@@ -64,30 +63,16 @@ ffmpeg安装完成后，输入ffmpeg回车，可以看到ffmeg可以正常运行
 在终端中输入以下命令并回车运行
 
 ```
-/bin/zsh -c "$(curl -fsSL https://gitee.com/huwei1024/HomebrewCN/raw/master/Homebrew.sh)"
+/bin/bash -c "$(curl -fsSL https://gitee.com/ineo6/homebrew-install/raw/master/install.sh)"
 ```
 
 然后根据提示输入国内源，开机密码等。直到安装结束。
 
-安装结束后需要把brew默认目录改为/opt/homebrew，brew才能正常运行。在终端中运行下面三行代码，每行输入完后回车：
+安装结束后，一般需要设置环境变量，brew才能正常运行。在终端中运行下面两行代码，每行输入完后回车：
 
 ```
-cd ~
-touch .zshrc
-open -e .zshrc
-```
-
-在打开的文件中添加以下两行内容，保存后退出：
-
-```
-export PATH="/opt/homebrew/bin:$PATH"
-export PATH="/opt/homebrew/sbin:$PATH"
-```
-
-然后在终端中运行以下语句,让刚才修改的环境变量启用：
-
-```
-source .zshrc
+echo 'eval "$(/opt/homebrew/bin/brew shellenv)"' >> ~/.zprofile
+eval "$(/opt/homebrew/bin/brew shellenv)"
 ```
 
 在终端中运行以下语句,可以查看brew是否成功运行：
@@ -111,30 +96,30 @@ ffmpeg
 #### 更新说明
 
 v 3.2
-​     增加Intel核显、A卡硬件编码器
+     增加Intel核显、A卡硬件编码器
 
 v 3.1
-​     增加B站缓存文件m4s类型的音视频合并
+     增加B站缓存文件m4s类型的音视频合并
 
 v 3.0
-​     增加显卡加速编码
+     增加显卡加速编码
 
 v 2.1
-​     Bug调整
+     Bug调整
 
 v 2.0
 
-​    1，使用了pyside6进行了重构，操作界面更美观。
-​    2，调整了部分编码细节。
+    1，使用了pyside6进行了重构，操作界面更美观。
+    2，调整了部分编码细节。
 
 v 1.3.1
 
-​    1，调整了一下批量压缩和自定义压缩的编码细节。
-​    2，改变了视频截取、视频连接、视频分离、视频合成的文件封装格式（文件名类型），以适应除mp4外的更多文件类型。
+    1，调整了一下批量压缩和自定义压缩的编码细节。
+    2，改变了视频截取、视频连接、视频分离、视频合成的文件封装格式（文件名类型），以适应除mp4外的更多文件类型。
 
 v 1.3.0
 
-​    增加线程控制，避免批量压缩时，因文件数量过多引起的进程崩溃。
+    增加线程控制，避免批量压缩时，因文件数量过多引起的进程崩溃。
 
 v 1.2.0:
     1，修正了一些软件BUG;
@@ -142,7 +127,7 @@ v 1.2.0:
 
 v 1.0.0:
 
-​    第一个测试版本
+    第一个测试版本
 
 #### LRConvert 软件说明**
 
