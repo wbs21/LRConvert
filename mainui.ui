@@ -7,7 +7,7 @@
     <x>0</x>
     <y>0</y>
     <width>800</width>
-    <height>599</height>
+    <height>596</height>
    </rect>
   </property>
   <property name="windowTitle">
@@ -23,7 +23,7 @@
       </sizepolicy>
      </property>
      <property name="currentIndex">
-      <number>6</number>
+      <number>4</number>
      </property>
      <widget class="QWidget" name="T1">
       <attribute name="title">
@@ -572,11 +572,7 @@
           </widget>
          </item>
          <item>
-          <widget class="QComboBox" name="T5bit">
-           <property name="layoutDirection">
-            <enum>Qt::RightToLeft</enum>
-           </property>
-          </widget>
+          <widget class="QComboBox" name="T5bit"/>
          </item>
          <item>
           <widget class="QLabel" name="label_20">
@@ -584,6 +580,29 @@
             <string>Mbp/s</string>
            </property>
           </widget>
+         </item>
+         <item>
+          <spacer name="horizontalSpacer_8">
+           <property name="orientation">
+            <enum>Qt::Horizontal</enum>
+           </property>
+           <property name="sizeHint" stdset="0">
+            <size>
+             <width>40</width>
+             <height>20</height>
+            </size>
+           </property>
+          </spacer>
+         </item>
+         <item>
+          <widget class="QLabel" name="label_22">
+           <property name="text">
+            <string>选择分辨率：</string>
+           </property>
+          </widget>
+         </item>
+         <item>
+          <widget class="QComboBox" name="T5size"/>
          </item>
          <item>
           <spacer name="horizontalSpacer_7">
@@ -606,11 +625,7 @@
           </widget>
          </item>
          <item>
-          <widget class="QComboBox" name="T5hwacc">
-           <property name="layoutDirection">
-            <enum>Qt::RightToLeft</enum>
-           </property>
-          </widget>
+          <widget class="QComboBox" name="T5hwacc"/>
          </item>
          <item>
           <spacer name="horizontalSpacer_6">
@@ -806,7 +821,7 @@
              <item row="1" column="0">
               <widget class="QGroupBox" name="groupBox_8">
                <property name="title">
-                <string>视频类型：</string>
+                <string>分辨率：</string>
                </property>
                <layout class="QVBoxLayout" name="verticalLayout_19">
                 <item>

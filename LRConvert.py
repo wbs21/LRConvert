@@ -108,6 +108,8 @@ class mainWindow(QWidget, Ui_Form):
         self.T5add.clicked.connect(self.browseDir)
         self.T5bit.addItems(['1', '2', '4', '8', '12', '16', '20', '30'])
         self.T5bit.setCurrentIndex(2)
+        self.T5size.addItems(['原始大小', '一半', '四分之一', '1920*1080', '1280*720'])
+        self.T5size.setCurrentIndex(0)
         self.T5hwacc.addItems(['libx264', 'nvenc', 'qsv', 'amf', 'videotoolbox'])
         self.T5hwacc.setCurrentIndex(0)
         self.T6start.clicked.connect(self.selfCode)
@@ -119,7 +121,8 @@ class mainWindow(QWidget, Ui_Form):
         self.T6speed.setCurrentIndex(0)
         self.T6grade.addItems(['5.1', '4.2', '4.1'])
         self.T6grade.setCurrentIndex(2)
-        self.T6type.addItems(['film', 'animation', 'stillimage', 'psnr', 'ssim'])
+        # self.T6type.addItems(['film', 'animation', 'stillimage', 'psnr', 'ssim'])
+        self.T6type.addItems(['原始大小', '一半', '四分之一', '1920*1080', '1280*720'])
         self.T6type.setCurrentIndex(0)
         self.T6level.addItems(['1', '2', '4', '8', '12', '16', '20', '30'])
         self.T6level.setCurrentIndex(2)
@@ -214,7 +217,7 @@ class mainWindow(QWidget, Ui_Form):
         textName = f"{path}/{newName}.txt"
         with open(textName, 'w', encoding='utf-8') as f:
             for line in filelist:
-                f.write(r"file '" + line + "'\n")
+                f.write(f"file '{line}" + "'\n")
         cmd = "ffmpeg", "-f", "concat", "-safe", "0", "-i", textName, "-c", "copy", f"{filename}_new_{newName}{filetype}"
         cmd = ' '.join(cmd)
         self.cmds.append(cmd)
@@ -263,14 +266,25 @@ class mainWindow(QWidget, Ui_Form):
         hwacc = self.T5hwacc.currentText()
         bitrates = f'{self.T5bit.currentText()}000k'
         newName = f"_new_{str(int(time.time()))[4:]}"
+        size = self.T5size.currentText()
+        if size == '原始大小':
+            size = 'scale=iw:ih'
+        if size == '一半':
+            size = 'scale=iw/2:ih/2'
+        if size == '四分之一':
+            size = 'scale=iw/4:ih/4'
+        if size == '1920*1080':
+            size = 'scale=1920:1080'
+        if size == '1280*720':
+            size = 'scale=1280:720'
         for i in range(len(self.files)):
             filename = self.files[i]
             if hwacc == 'libx264':
                 cmd = "ffmpeg", "-i", filename, "-c:v", hwacc, "-profile:v", "high", "-preset:v", "fast", "-level", "4.1", "-b:v", bitrates, \
-                    "-bufsize", "2000k", "-pix_fmt", "yuv420p", "-acodec", "aac", "-ab", "128k", filename + newName + ".mp4"
+                    "-vf", size, "-bufsize", "2000k", "-pix_fmt", "yuv420p", "-acodec", "aac", "-ab", "128k", filename + newName + ".mp4"
             else:
                 cmd = "ffmpeg", "-i", filename, "-c:v", f'h264_{hwacc}', "-profile:v", "high", "-coder", "cabac", "-preset:v", "fast", "-level", "5.1", "-b:v", bitrates, \
-                    "-bufsize", "2000k", "-pix_fmt", "yuv420p", "-acodec", "aac", "-ab", "128k", filename + newName + ".mp4"
+                    "-vf", size, "-bufsize", "2000k", "-pix_fmt", "yuv420p", "-acodec", "aac", "-ab", "128k", filename + newName + ".mp4"
             cmd = ' '.join(cmd)
             self.cmds.append(cmd)
             self.files.append(filename + newName + ".mp4")
@@ -285,15 +299,25 @@ class mainWindow(QWidget, Ui_Form):
         hwacc = self.T6quality.currentText()
         preset = self.T6speed.currentText()
         level = self.T6grade.currentText()
-        tune = self.T6type.currentText()
+        size = self.T6type.currentText()
         bitrates = f'{self.T6level.currentText()}000k'
         ab = f"{str(self.T6audio.currentText())}k"
+        if size == '原始大小':
+            size = 'scale=iw:ih'
+        if size == '一半':
+            size = 'scale=iw/2:ih/2'
+        if size == '四分之一':
+            size = 'scale=iw/4:ih/4'
+        if size == '1920*1080':
+            size = 'scale=1920:1080'
+        if size == '1280*720':
+            size = 'scale=1280:720'
         if hwacc == 'libx264':
-            cmd = "ffmpeg", "-i", path, "-c:v", hwacc, "-profile:v", "high", "-preset:v", preset, "-level", level, "-tune", tune, "-b:v", bitrates, \
+            cmd = "ffmpeg", "-i", path, "-c:v", hwacc, "-profile:v", "high", "-preset:v", preset, "-level", level, "-vf", size, "-b:v", bitrates, \
                 "-bufsize", "2000k", "-pix_fmt", "yuv420p", "-acodec", "aac", "-ab", ab, filename + newName + ".mp4"
         else:
             cmd = "ffmpeg", "-i", path, "-c:v", f'h264_{hwacc}', "-profile:v", "high", "-coder", "cabac", "-preset:v", preset, "-level", "5.1", "-b:v", bitrates, \
-                "-bufsize", "2000k", "-pix_fmt", "yuv420p", "-acodec", "aac", "-ab", ab, filename + newName + ".mp4"
+                "-vf", size, "-bufsize", "2000k", "-pix_fmt", "yuv420p", "-acodec", "aac", "-ab", ab, filename + newName + ".mp4"
         cmd = ' '.join(cmd)
         self.cmds.append(cmd)
         self.files.append(filename + newName + ".mp4")
@@ -339,7 +363,7 @@ if __name__ == '__main__':
         MacOs用户可使用h264_videotoolbox。\n
         '''
 
-    version = 'version: 3.2'
+    version = 'version: 3.3'
     version_URL = 'https://gitee.com/wbs21/lrconvert/blob/main/version.md'
     home_URL = 'https://gitee.com/wbs21/lrconvert/'
     app = QApplication(sys.argv)

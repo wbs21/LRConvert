@@ -3,7 +3,7 @@
 ################################################################################
 ## Form generated from reading UI file 'mainui.ui'
 ##
-## Created by: Qt User Interface Compiler version 6.4.0
+## Created by: Qt User Interface Compiler version 6.4.2
 ##
 ## WARNING! All changes made in this file will be lost when recompiling UI file!
 ################################################################################
@@ -24,7 +24,7 @@ class Ui_Form(object):
     def setupUi(self, Form):
         if not Form.objectName():
             Form.setObjectName(u"Form")
-        Form.resize(800, 599)
+        Form.resize(800, 596)
         self.verticalLayout = QVBoxLayout(Form)
         self.verticalLayout.setObjectName(u"verticalLayout")
         self.tabWidget = QTabWidget(Form)
@@ -392,7 +392,6 @@ class Ui_Form(object):
 
         self.T5bit = QComboBox(self.T5)
         self.T5bit.setObjectName(u"T5bit")
-        self.T5bit.setLayoutDirection(Qt.RightToLeft)
 
         self.horizontalLayout_13.addWidget(self.T5bit)
 
@@ -400,6 +399,20 @@ class Ui_Form(object):
         self.label_20.setObjectName(u"label_20")
 
         self.horizontalLayout_13.addWidget(self.label_20)
+
+        self.horizontalSpacer_8 = QSpacerItem(40, 20, QSizePolicy.Expanding, QSizePolicy.Minimum)
+
+        self.horizontalLayout_13.addItem(self.horizontalSpacer_8)
+
+        self.label_22 = QLabel(self.T5)
+        self.label_22.setObjectName(u"label_22")
+
+        self.horizontalLayout_13.addWidget(self.label_22)
+
+        self.T5size = QComboBox(self.T5)
+        self.T5size.setObjectName(u"T5size")
+
+        self.horizontalLayout_13.addWidget(self.T5size)
 
         self.horizontalSpacer_7 = QSpacerItem(40, 20, QSizePolicy.Expanding, QSizePolicy.Minimum)
 
@@ -412,7 +425,6 @@ class Ui_Form(object):
 
         self.T5hwacc = QComboBox(self.T5)
         self.T5hwacc.setObjectName(u"T5hwacc")
-        self.T5hwacc.setLayoutDirection(Qt.RightToLeft)
 
         self.horizontalLayout_13.addWidget(self.T5hwacc)
 
@@ -690,7 +702,7 @@ class Ui_Form(object):
 
         self.retranslateUi(Form)
 
-        self.tabWidget.setCurrentIndex(6)
+        self.tabWidget.setCurrentIndex(4)
 
 
         QMetaObject.connectSlotsByName(Form)
@@ -731,6 +743,7 @@ class Ui_Form(object):
         self.T5start.setText(QCoreApplication.translate("Form", u"\u5f00\u59cb\u7f16\u7801", None))
         self.label_17.setText(QCoreApplication.translate("Form", u"\u9009\u62e9\u7f16\u7801\u7801\u7387\uff1a", None))
         self.label_20.setText(QCoreApplication.translate("Form", u"Mbp/s", None))
+        self.label_22.setText(QCoreApplication.translate("Form", u"\u9009\u62e9\u5206\u8fa8\u7387\uff1a", None))
         self.label_21.setText(QCoreApplication.translate("Form", u"\u9009\u62e9\u7f16\u7801\u5668\uff1a", None))
         self.T5stop.setText(QCoreApplication.translate("Form", u"\u505c\u6b62\u7f16\u7801", None))
         self.groupBox_11.setTitle(QCoreApplication.translate("Form", u"\u7801\u7387\u63a8\u8350\uff1a", None))
@@ -747,7 +760,7 @@ class Ui_Form(object):
         self.groupBox_5.setTitle(QCoreApplication.translate("Form", u"\u7f16\u7801\u5668\uff1a", None))
         self.groupBox_6.setTitle(QCoreApplication.translate("Form", u"\u7f16\u7801\u901f\u5ea6\uff1a", None))
         self.groupBox_7.setTitle(QCoreApplication.translate("Form", u"\u7f16\u7801\u7b49\u7ea7\uff1a", None))
-        self.groupBox_8.setTitle(QCoreApplication.translate("Form", u"\u89c6\u9891\u7c7b\u578b\uff1a", None))
+        self.groupBox_8.setTitle(QCoreApplication.translate("Form", u"\u5206\u8fa8\u7387\uff1a", None))
         self.groupBox_9.setTitle(QCoreApplication.translate("Form", u"\u89c6\u9891\u7801\u7387Mbp/s\uff1a", None))
         self.groupBox_10.setTitle(QCoreApplication.translate("Form", u"\u97f3\u9891\u7801\u7387kbp/s\uff1a", None))
         self.T6start.setText(QCoreApplication.translate("Form", u"\u5f00\u59cb\u7f16\u7801", None))
