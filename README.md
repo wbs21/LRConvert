@@ -7,7 +7,7 @@
 LRConvert只是一个ffmpeg的用户界面，必须配合ffmpeg使用。
 windows只需将LRConvert和ffmpeg放到一个文件夹中即可。
 
-### Mac安装ffmpeg
+### 一,Mac直接使用编译好的ffmpeg
 
 1. 打开链接[static FFmpeg binaries for macOS 64-bit (evermeet.cx)](https://evermeet.cx/ffmpeg/)下载编译好的文件，解压缩后，拷贝到应用程序中，并运行一次。
 2. 配置环境变量，打开终端，依次运行以下命令:
@@ -31,11 +31,11 @@ source .zshrc
 
 5.在终端中输入ffmpeg并回车，查看ffmpeg是否能运行。
 
-#### Mac使用homebrew安装ffmpeg
+#### 二，Mac使用homebrew安装ffmpeg
 
 Mac安装homebrew，可参考以下步骤。
 
-#### intel版 Mac安装brew
+#### 1，intel版 Mac安装brew
 
 下面的简化方法使用国内镜像软件源，一键安装配置脚本。
 
@@ -57,36 +57,22 @@ brew install ffmpeg
 
 ffmpeg安装完成后，输入ffmpeg回车，可以看到ffmeg可以正常运行的多行提示，则表示ffmpeg安装成功了！
 
-#### M1版 Mac安装brew
+#### 2，M1版 Mac安装brew
 
 可先通过app Store安装xcode,以备后续安装git需要。
 在终端中输入以下命令并回车运行
 
 ```
-/bin/zsh -c "$(curl -fsSL https://gitee.com/huwei1024/HomebrewCN/raw/master/Homebrew.sh)"
+/bin/bash -c "$(curl -fsSL https://gitee.com/ineo6/homebrew-install/raw/master/install.sh)"
 ```
 
 然后根据提示输入国内源，开机密码等。直到安装结束。
 
-安装结束后需要把brew默认目录改为/opt/homebrew，brew才能正常运行。在终端中运行下面三行代码，每行输入完后回车：
+安装结束后，需要设置环境变量，brew才能正常运行。在终端中运行下面两行代码，每行输入完后回车：
 
 ```
-cd ~
-touch .zshrc
-open -e .zshrc
-```
-
-在打开的文件中添加以下两行内容，保存后退出：
-
-```
-export PATH="/opt/homebrew/bin:$PATH"
-export PATH="/opt/homebrew/sbin:$PATH"
-```
-
-然后在终端中运行以下语句,让刚才修改的环境变量启用：
-
-```
-source .zshrc
+echo 'eval "$(/opt/homebrew/bin/brew shellenv)"' >> ~/.zprofile
+eval "$(/opt/homebrew/bin/brew shellenv)"
 ```
 
 在终端中运行以下语句,可以查看brew是否成功运行：
