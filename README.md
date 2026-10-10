@@ -95,6 +95,17 @@ ffmpeg
 
 #### 更新说明
 
+v 3.4
+     1. 命令行改为参数列表方式传递（不再使用 shell），文件名/路径中的空格、中文、引号都不再导致失败；
+     2. 修复批量压缩时输出文件被写回输入列表、重复点击会对输出文件再转码的问题；
+     3. 修复缺少 `-y` 时 ffmpeg 等待确认导致程序卡死的问题；
+     4. 修复 `scale=iw/2:ih/2` 产生奇数分辨率导致 yuv420p 编码失败的问题；
+     5. 修复 `-bufsize` 写死 2000k 导致高码率下画质被压死的问题；
+     6. 停止按钮改为先发 `q` 让 ffmpeg 正常收尾，避免输出文件损坏；
+     7. 进度改用 `ffprobe` + `-progress pipe:1` 计算，并新增底部进度条；
+     8. 输出文件名改为 `原名_new_时间戳.后缀`，并自动避让已存在的文件；
+     9. 移除 `exec()`、`locals()` 等动态写法，ffmpeg 相关逻辑抽到 `ffmpeg_cmd.py` 并补充单元测试。
+
 v 3.3
      添加分辨率修改
 
@@ -140,6 +151,27 @@ Little Rabbit Convert 小兔子转换器 (Little Rabbit Convert) 是为了方便
 
 Little Rabbit Convert的所有功能完全依赖于FFMPEG。因此您的系统中如果没有安装过FFMPEG,
 那么请将本压缩包中的ffmpeg.exe文件，拷贝到Little Rabbit Convert的同一文件夹下，本工具才能正常使用。
+
+#### 开发说明
+
+```bash
+pip install -r requirements.txt
+python LRConvert.py          # 运行
+
+python -m unittest discover -s tests -v   # 运行测试（需要 ffmpeg / ffprobe）
+```
+
+代码分为两层：
+
+- `ffmpeg_cmd.py`：ffmpeg 定位、命令构造、进度解析（不依赖 Qt，可单独测试）；
+- `LRConvert.py`：界面与任务调度。
+
+如果不想把 ffmpeg 放进 PATH，可以用环境变量指定：
+
+```bash
+export LRCONVERT_FFMPEG=/path/to/ffmpeg
+export LRCONVERT_FFPROBE=/path/to/ffprobe
+```
 
 #### 安装说明
 
