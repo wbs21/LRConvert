@@ -1,7 +1,26 @@
 dist
 build
+cmake-build-*
+CMakeUserPresets.json
 __pycache__
 test
 *.spec
 .idea
 .DS_Store
+
+# WorkBuddy 代理工作数据（记忆/日志），非项目资产
+.workbuddy/
+
+# ---- FFmpeg 外部构建目录（仓库外，只作为 vendor/ffmpeg 的来源）----
+# 项目实际使用的是 vendor/ffmpeg/ 里的挑选副本，这些源目录不入库。
+ffmpeg-gpl/
+ffmpeg-gpl-full/
+/ffmpeg/
+
+# ---- FFmpeg 运行时 DLL（75MB，29 个 GPL 动态库）----
+# 构建必需的是 vendor/ffmpeg/include/（头文件，1.6MB），那个要入库。
+# 这 29 个 DLL 只在运行时需要，不进仓库：
+#   开发者：设环境变量 LRCONVERT_FFMPEG_DIR 指向自己的 FFmpeg 目录，
+#           或从 GitHub Release 的发布包里取。
+#   打包脚本 scripts/package.sh 会自动从本目录复制 DLL 进 dist/。
+vendor/ffmpeg/bin/

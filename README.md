@@ -1,180 +1,123 @@
-### 软件下载地址
+# LRconvert（小兔子转换器）· C++ 版
 
-链接：[https://pan.baidu.com/s/1dGx04xZ-LoiZwMHB3KheOQ?pwd=sxmf](https://pan.baidu.com/s/1dGx04xZ-LoiZwMHB3KheOQ?pwd=sxmf)
+FFmpeg 的图形界面：**截取 / 连接 / 分离 / 合并 / 批量压缩 / 自定义压缩**。
 
-### 安装ffmpeg帮助说明
+本目录是 **C++20 + Qt6 重写版**。原 Python/PySide6 版本（v3.4）保存在
+[`python/`](python/) 目录，含完整的历史代码与 MIT 许可证。
 
-LRConvert只是一个ffmpeg的用户界面，必须配合ffmpeg使用。
-windows只需将LRConvert和ffmpeg放到一个文件夹中即可。
+## 与 Python 版的区别
 
-### 一,Mac直接使用编译好的ffmpeg
+| | Python 版（python/） | C++ 版（本目录） |
+|---|---|---|
+| FFmpeg 调用方式 | 子进程跑 `ffmpeg.exe`，解析 `-progress pipe:1` 输出 | **进程内运行时加载 libav\* 动态库**，直接调 API |
+| ffmpeg 安装 | 需要用户自行安装并加入 PATH | 不需要， DLL 随程序分发 |
+| 进度 | 解析命令行文本输出 | 编码/拷贝循环内按 pts 直接计算 |
+| 停止 | 先发 `q` 再强杀进程 | 协作式取消：flush 解码器/编码器后正常写文件尾 |
+| 启动速度 | 启动即检测 ffmpeg | **UI 先出首帧，动态库在后台加载**，缺库不阻塞启动 |
+| 界面 | PySide6 + mainui.ui | Qt6 + 同一份 mainui.ui（控件名、交互完全一致） |
 
-1. 打开链接[static FFmpeg binaries for macOS 64-bit (evermeet.cx)](https://evermeet.cx/ffmpeg/)下载编译好的文件，解压缩后，拷贝到应用程序中，并运行一次。
-2. 配置环境变量，打开终端，依次运行以下命令:
+六大功能的行为（输入输出、命名规则 `原名_new_时间戳.后缀`、冲突追加 `(1)`）
+与原版保持一致，老用户零学习成本。
 
-   ```
-   touch .zshrc
-   open -e .zshrc
-   ```
+## 构建
 
-3.在打开的文件中添加下面一行
+依赖：
 
-```
-export PATH=$PATH:/Applications
-```
-
-4.关闭文件，然后在终端中输入以下并运行，让环境变量生效：
-
-```
-source .zshrc
-```
-
-5.在终端中输入ffmpeg并回车，查看ffmpeg是否能运行。
-
-#### 二，Mac使用homebrew安装ffmpeg
-
-Mac安装homebrew，可参考以下步骤。
-
-#### 1，intel版 Mac安装brew
-
-下面的简化方法使用国内镜像软件源，一键安装配置脚本。
-
-注：以下命令均在Mac终端窗口中进行：
-
-```
-/bin/zsh -c "$(curl -fsSL https://gitee.com/cunkai/HomebrewCN/raw/master/Homebrew.sh)"
-```
-
-脚本运行后，会要求先选择软件源，个人使用的清华源，输入2回车。
-然后会要求输入开机密码，输入时没有显示，输入完按回车键开始安装。
-如果系统没有安装过git，安装自动会跳出git安装程序，安装完成后请重新从头开始安装brew。
-
-brew安装完成后，就可以用brew来安装ffmpeg
-
-```
-brew install ffmpeg
-```
-
-ffmpeg安装完成后，输入ffmpeg回车，可以看到ffmeg可以正常运行的多行提示，则表示ffmpeg安装成功了！
-
-#### 2，M1版 Mac安装brew
-
-可先通过app Store安装xcode,以备后续安装git需要。
-在终端中输入以下命令并回车运行
-
-```
-/bin/bash -c "$(curl -fsSL https://gitee.com/ineo6/homebrew-install/raw/master/install.sh)"
-```
-
-然后根据提示输入国内源，开机密码等。直到安装结束。
-
-安装结束后，需要设置环境变量，brew才能正常运行。在终端中运行下面两行代码，每行输入完后回车：
-
-```
-echo 'eval "$(/opt/homebrew/bin/brew shellenv)"' >> ~/.zprofile
-eval "$(/opt/homebrew/bin/brew shellenv)"
-```
-
-在终端中运行以下语句,可以查看brew是否成功运行：
-
-```
-brew -v
-```
-
-最后，在终端中运行以下代码，安装ffmpeg:
-
-```
-brew install ffmpeg
-```
-
-安装完成后，在终端中运行ffmpeg，可以看到ffmpeg已经安装成功。
-
-```
-ffmpeg
-```
-
-#### 更新说明
-
-v 3.4
-     1. 命令行改为参数列表方式传递（不再使用 shell），文件名/路径中的空格、中文、引号都不再导致失败；
-     2. 修复批量压缩时输出文件被写回输入列表、重复点击会对输出文件再转码的问题；
-     3. 修复缺少 `-y` 时 ffmpeg 等待确认导致程序卡死的问题；
-     4. 修复 `scale=iw/2:ih/2` 产生奇数分辨率导致 yuv420p 编码失败的问题；
-     5. 修复 `-bufsize` 写死 2000k 导致高码率下画质被压死的问题；
-     6. 停止按钮改为先发 `q` 让 ffmpeg 正常收尾，避免输出文件损坏；
-     7. 进度改用 `ffprobe` + `-progress pipe:1` 计算，并新增底部进度条；
-     8. 输出文件名改为 `原名_new_时间戳.后缀`，并自动避让已存在的文件；
-     9. 移除 `exec()`、`locals()` 等动态写法，ffmpeg 相关逻辑抽到 `ffmpeg_cmd.py` 并补充单元测试。
-
-v 3.3
-     添加分辨率修改
-
-v 3.2
-     增加Intel核显、A卡硬件编码器
-
-v 3.1
-     增加B站缓存文件m4s类型的音视频合并
-
-v 3.0
-     增加显卡加速编码
-
-v 2.1
-     Bug调整
-
-v 2.0
-
-    1，使用了pyside6进行了重构，操作界面更美观。
-    2，调整了部分编码细节。
-
-v 1.3.1
-
-    1，调整了一下批量压缩和自定义压缩的编码细节。
-    2，改变了视频截取、视频连接、视频分离、视频合成的文件封装格式（文件名类型），以适应除mp4外的更多文件类型。
-
-v 1.3.0
-
-    增加线程控制，避免批量压缩时，因文件数量过多引起的进程崩溃。
-
-v 1.2.0:
-    1，修正了一些软件BUG;
-    2, 增加了MAC版本。
-
-v 1.0.0:
-
-    第一个测试版本
-
-#### LRConvert 软件说明**
-
-Little Rabbit Convert 小兔子转换器 (Little Rabbit Convert) 是为了方便使用FFMPEG而设计的一个简易的FFMPEG图形界面（GUI）。
-
-#### 软件说明
-
-Little Rabbit Convert的所有功能完全依赖于FFMPEG。因此您的系统中如果没有安装过FFMPEG,
-那么请将本压缩包中的ffmpeg.exe文件，拷贝到Little Rabbit Convert的同一文件夹下，本工具才能正常使用。
-
-#### 开发说明
+- **Qt 6**（MinGW 版，≥ 6.5；MSVC 版与 FFmpeg 的 MinGW-w64 构建 ABI 不兼容，不能混用）
+- **CMake** ≥ 3.20
+- 编译器：**Qt 自带的 MinGW**（`Qt/Tools/mingw1310_64`，GCC 13.1）。
+  不要用系统里更新的 g++——Qt 官方包由 GCC 13.1 构建，混用大版本不同的
+  libstdc++ 容易运行时出错。
 
 ```bash
-pip install -r requirements.txt
-python LRConvert.py          # 运行
-
-python -m unittest discover -s tests -v   # 运行测试（需要 ffmpeg / ffprobe）
+./scripts/build.sh          # Release 构建
+./scripts/build.sh clean    # 清掉 build/ 重新配置
 ```
 
-代码分为两层：
+FFmpeg 头文件在仓库内的 [`vendor/ffmpeg/include/`](vendor/ffmpeg/include/)，构建直接用它。
+29 个运行时 DLL（74.6 MB，挑选依据见 [`vendor/ffmpeg/README.md`](vendor/ffmpeg/README.md)）
+**不在仓库里**（体积原因，已 gitignore），两种获取方式：
 
-- `ffmpeg_cmd.py`：ffmpeg 定位、命令构造、进度解析（不依赖 Qt，可单独测试）；
-- `LRConvert.py`：界面与任务调度。
+- 从 [GitHub Release](../../releases) 的发布包里取（解压后 `ffmpeg/` 子目录即是）；
+- 或者设环境变量 `LRCONVERT_FFMPEG_DIR` 指向你自己的 FFmpeg DLL 目录。
 
-如果不想把 ffmpeg 放进 PATH，可以用环境变量指定：
+构建本身只需要 `include/`，DLL 缺失不影响编译；`scripts/package.sh` 会在打包时
+自动把 `vendor/ffmpeg/bin/` 的内容复制进发布目录。
+
+> 工程**不链接** libav\*——符号在运行时由 `src/ffmpeg/FfmpegApi` 解析，
+> 这样 DLL 不会写进 PE 导入表，进程启动时不会预加载它们。详见
+> [`docs/LRConvert_Cpp_Qt_重构方案.md`](docs/LRConvert_Cpp_Qt_重构方案.md) §6。
+
+## 运行
 
 ```bash
-export LRCONVERT_FFMPEG=/path/to/ffmpeg
-export LRCONVERT_FFPROBE=/path/to/ffprobe
+./scripts/run.sh
 ```
 
-#### 安装说明
+FFmpeg 动态库按以下顺序查找（`src/ffmpeg/FfmpegApi.cpp`）：
 
-1. 本软件为绿色免安装版。
-2. 将压缩包解压到本地，打开LRConvert.exe文件即可使用。
-3. Little Rabbit Convert的前四项功能，因为不重新编码，所以速度极快，而且不会带来质量损失。
+1. 环境变量 `LRCONVERT_FFMPEG_DIR` 指定的目录；
+2. exe 同级的 `ffmpeg/` 子目录（构建与打包脚本的默认布局）；
+3. exe 所在目录本身。
+
+> ⚠️ **不要把 FFmpeg 的 DLL 放到 exe 同级目录**。完整构建会附带
+> `zlib1.dll` / `libstdc++-6.dll` / `libbz2-1.dll` 等通用运行时库，
+> 它们会优先命中 Qt 自身的同名依赖（exe 目录搜索优先级最高），
+> 版本对不上会让进程直接启动失败（退出码 127，无任何提示）。
+> 放 `ffmpeg/` 子目录即可物理隔离。
+
+## 无界面验证工具
+
+不走 GUI、直接复用任务层代码路径，便于回归和 CI：
+
+```bash
+./build/capability_check.exe                        # 引擎能力清单（不依赖 Qt）
+./build/remux_check.exe cut    <输入> <输出> <起始秒> <结束秒>
+./build/remux_check.exe video  <输入> <输出>        # 只留视频轨
+./build/remux_check.exe audio  <输入> <输出>        # 只留音频轨
+./build/remux_check.exe merge  <视频> <音频> <输出>
+./build/remux_check.exe concat <输出> <输入1> <输入2> ...
+./build/transcode_check.exe  <输入> <输出> [编码器] [视频kbps] [缩放] [音频kbps]
+```
+
+一键全功能回归（与 ffmpeg CLI 同参数输出逐项对比）：
+
+```bash
+./scripts/regression.sh
+```
+
+## 打包分发
+
+```bash
+./scripts/package.sh        # 构建 + windeployqt + FFmpeg DLL
+```
+
+产物（版本号从 `src/core/Version.h` 读取，单一来源）：
+
+- `dist/LRConvert-<版本>/` —— 完整发布目录（exe、Qt 运行时、`ffmpeg/` 子目录、README、LICENSE）
+- `dist/LRConvert-<版本>-win64.zip` —— 上一项的压缩包，解压即用
+
+打包末尾会在无 Qt 开发环境的干净 PATH 下自动冒烟验证自包含性。
+
+> **发布目录里的 Qt DLL 不能移到子文件夹。** 它们写在 exe 的 PE 导入表里，
+> 由 Windows 加载器在 `main()` 之前按「exe 目录 → 系统目录 → PATH」解析，
+> 子文件夹不在搜索范围——移走会让程序直接无法启动（退出码 127，无提示）。
+> FFmpeg 的 DLL 是个例外：它们放在 `ffmpeg/` 子目录，因为程序是用绝对路径
+> 运行时加载它们的，不进导入表。
+
+## 已知限制
+
+- 截取/连接是流拷贝，从最近关键帧开始，起点可能略早于设定时间（与原版一致）。
+- 连接要求各段编码参数一致（与原版一致，README 原有提示）。
+- **硬件编码器启动后自动识别**：批量压缩（Tab5）与自定义压缩（Tab6）的编码器
+  下拉框启动时只含软件编码器 libx264，后台探测确认本机可用（有对应显卡）的
+  硬件项才会加入；不支持的项从不出现，日志区有原因说明。万一选中后仍打开
+  失败，任务会自动回退 libx264。
+- 截取边界与 ffmpeg CLI 存在约 2 帧（66ms）差异：CLI 按 dts 收尾，
+  B 帧内容下会多带少量帧；本实现按 pts 收尾，输出是精确的 `[起始, 结束)` 区间。
+  详见 docs/ 回归方案 §9.8。
+
+## 许可证
+
+- C++ 版：GPL-3.0（见 [LICENSE](LICENSE)，因运行时链接的 FFmpeg 为 GPL 构建）
+- Python 原版：MIT（见 [python/LICENSE](python/LICENSE)）
