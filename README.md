@@ -119,5 +119,23 @@ FFmpeg 动态库按以下顺序查找（`src/ffmpeg/FfmpegApi.cpp`）：
 
 ## 许可证
 
-- C++ 版：GPL-3.0（见 [LICENSE](LICENSE)，因运行时链接的 FFmpeg 为 GPL 构建）
-- Python 原版：MIT（见 [python/LICENSE](python/LICENSE)）
+- C++ 版：**GPL-3.0**（见 [LICENSE](LICENSE)）。
+  原因是它在进程内运行时链接 `libavcodec` / `libavformat` 等库，
+  而本项目配套的 FFmpeg 是 `9.0.2-gplfull` 构建（含 libx264、libx265 等 GPL 组件），
+  按 GPL 的条款本程序属于其衍生作品。
+  注意：运行时 `LoadLibrary` 动态加载同样构成链接，不因为是"延迟加载"而豁免。
+- Python 原版：MIT（见 [python/LICENSE](python/LICENSE)）。
+  它只是以子进程方式调用 `ffmpeg.exe`，通过命令行参数与标准输出通信，
+  属于独立程序聚合，因此不受 GPL 传染。
+
+### GPL-3 要求的源码提供
+
+本程序以 GPL-3.0 发布，分发二进制时须同时提供完整源码。源码在此仓库本分支：
+
+```
+https://github.com/wbs21/LRConvert          （根目录即 C++ 版源码，src/ 下）
+```
+
+仓库不含 29 个 FFmpeg 运行时 DLL（74.6 MB，体积原因），
+它们同样遵循 GPL-3，可在 [GitHub Releases](../../releases) 的发布包里取得，
+发布包内 `ffmpeg/` 子目录即是。
