@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 wbs21
+
 #include "ffmpeg/MediaProbe.h"
 
 // 只有本文件会访问 libav* 结构体字段，因此在这里 include 真正的头文件

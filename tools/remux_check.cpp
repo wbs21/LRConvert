@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 wbs21
+
 // ---------------------------------------------------------------------------
 // remux_check —— RemuxTask 的无界面功能验证工具。
 //

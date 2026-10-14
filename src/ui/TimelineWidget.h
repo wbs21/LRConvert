@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 wbs21
+
 #pragma once
 // ---------------------------------------------------------------------------
 // Tab1 的影片显示区（时间轴）—— 一个自绘 QWidget，纵向 4 层：

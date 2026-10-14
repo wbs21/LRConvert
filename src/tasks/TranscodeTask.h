@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 wbs21
+
 #pragma once
 // ---------------------------------------------------------------------------
 // TranscodeTask —— 完整编解码管线，对应原来两个「重新编码」功能：

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 wbs21
+
 // ---------------------------------------------------------------------------
 // capability_check —— M0 验收用的小工具（**不依赖 Qt**，Qt6 没装也能构建运行）。
 //

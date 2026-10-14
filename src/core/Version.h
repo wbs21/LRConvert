@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 wbs21
+
 // ---------------------------------------------------------------------------
 // 版本号单一来源（single source of truth）。
 //

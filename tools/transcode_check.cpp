@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 wbs21
+
 // ---------------------------------------------------------------------------
 // transcode_check —— 无界面的转码验证工具
 //

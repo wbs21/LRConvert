@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 wbs21
+
 #pragma once
 // ---------------------------------------------------------------------------
 // 路径 / 常量工具 —— 对应 Python 版 ffmpeg_cmd.py 的常量与 output_path /

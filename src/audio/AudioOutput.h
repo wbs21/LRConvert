@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 wbs21
+
 #pragma once
 // ---------------------------------------------------------------------------
 // 音频输出 —— 把 PCM 丢给声卡。

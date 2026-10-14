@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 wbs21
+
 #pragma once
 // ---------------------------------------------------------------------------
 // FfmpegApi —— 全局唯一的 libav* 访问门面。
