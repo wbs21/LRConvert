@@ -10,6 +10,9 @@ test
 .idea
 .DS_Store
 
+# 本地测试素材（如 video/*.mp4，体积大），不入库
+video/
+
 # WorkBuddy 代理工作数据（记忆/日志），非项目资产
 .workbuddy/
 

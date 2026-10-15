@@ -1,0 +1,6 @@
+# 行尾策略：这两个文件钉死 LF。
+# 背景：core.autocrlf=true 会把检出文件转成 CRLF，而 .gitignore 里的"空行"
+# 一旦残留 \r 就会被 git 当成空模式，导致 git check-ignore 出现幻影命中
+# （2026-10-15 实测；详见 .workbuddy 项目记忆）。用 eol=lf 堵死复活路。
+.gitattributes text eol=lf
+.gitignore text eol=lf
