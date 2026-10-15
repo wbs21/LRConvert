@@ -1,4 +1,6 @@
+# 打包产物；dist_*/ 是打包时临时挪走的旧版本目录
 dist
+dist_*/
 build
 cmake-build-*
 CMakeUserPresets.json

@@ -76,6 +76,9 @@ public:
     /// 冒烟测试用：设定可见区间，再把深蓝滑块拖到 moveFrac（控件宽度比例）处，
     /// 用来验证"拖动=整体平移、窗口长度不变"
     void smokePanSlider(double from, double to, double moveFrac);
+    /// 冒烟用：最近一次播放的损坏统计 —— 验证"坏块被跳过且播放没中断"，
+    /// 以及导入取帧时发现的坏包数
+    QString smokeDamageState() const;
 
 signals:
     /// 由工作线程发出（Qt 会自动排队投递回 GUI 线程）
@@ -201,7 +204,7 @@ private:
     QTimer *previewThrottle_ = nullptr;  ///< 拖动蓝标尺时的取帧节流
     QTimer *assetThrottle_ = nullptr;    ///< 缩放/平移后的缩略图与波形刷新节流
     lr::FrameGrabber cutGrabber_;        ///< 保持文件打开，连续取帧
-    std::mutex cutGrabberMutex_;
+    mutable std::mutex cutGrabberMutex_;  ///< mutable：冒烟查询是 const 的，也要能加锁
     QString cutSource_;
     lr::MediaInfo cutInfo_;
     std::vector<double> cutKeyframes_;
@@ -212,6 +215,8 @@ private:
     QString cutStartStyle_;              ///< 「开始剪辑」常态样式（蓝色），忙碌时换成红色
     QString playStyle_;                  ///< 「▶ 播放」常态样式（绿色），播放中换成红色「■ 停止」
     lr::FramePlayer player_;             ///< Tab1 预览播放（自己开一份文件，不与取帧器抢）
+    /// 最近一次播放的损坏统计（冒烟核对"坏块被跳过、播放没中断"用）
+    lr::FramePlayer::PlayStats lastPlayStats_;
     bool playRunning_ = false;           ///< UI 侧的播放状态（线程退出有延迟，以这个为准）
     /// 播放世代：每次 startPlayback 都 +1。播放线程退出的"播完了"是排队投递的，
     /// 可能晚到一步（比如刚 stop 又立刻重播），世代号对不上就直接丢掉，

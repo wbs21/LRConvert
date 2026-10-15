@@ -37,6 +37,17 @@ public:
         double actualSec = 0.0;  // 实际取到的帧所在时间（可能与请求时间略有差别）
     };
 
+    /// 解码动作的三种结局 —— 必须区分开，不能一律当成"读完了"。
+    ///
+    /// 损坏文件里最常见的是 EndOfStream 与 Error 被混为一谈：
+    /// 一帧解不出就当播完，表现是"播放莫名停住"。播放循环要靠这个
+    /// 决定是继续（沿用上一帧）还是真的结束。
+    enum class DecodeResult {
+        Ok,           ///< 解出一帧
+        EndOfStream,  ///< 文件正常读完，后面没有数据了
+        Error,        ///< 数据损坏 / 参数异常，这一帧拿不到，但后面可能还有
+    };
+
     bool open(FfmpegApi &api, const std::string &path, std::string &error);
     void close();
     bool isOpen() const { return fmt_ != nullptr; }
@@ -49,10 +60,11 @@ public:
     /// 只做 seek + 清解码器，不解任何帧。连续播放前调一次即可。
     bool seekTo(double tSec, std::string &error);
 
-    /// 顺序解出**下一帧**（不 seek）。文件读完返回 false。
-    /// 播放就靠它：seekTo 一次，然后反复 grabNext，比每帧都 grabAt 快得多
-    /// （grabAt 每帧都要从关键帧重新解码一遍整段 GOP）。
-    bool grabNext(int outW, int outH, Frame &out, std::string &error);
+    /// 顺序解出**下一帧**（不 seek）。播放就靠它：seekTo 一次，然后反复
+    /// grabNext，比每帧都 grabAt 快得多（grabAt 每帧都要从关键帧重新解码一遍
+    /// 整段 GOP）。
+    /// 返回 DecodeResult：EndOfStream 才是真的播完，Error 是"这一帧坏了"。
+    DecodeResult grabNext(int outW, int outH, Frame &out, std::string &error);
 
     // ---- 播放用的两段式接口（跳帧必需）----
     //
@@ -63,7 +75,7 @@ public:
 
     /// 解码下一帧但**不做转换**，帧暂存在内部，secOut 返回它的时间。
     /// 取用前必须调 takeFrame() 或 dropFrame()，否则下一帧会把它顶掉。
-    bool decodeNext(double &secOut, std::string &error);
+    DecodeResult decodeNext(double &secOut, std::string &error);
 
     /// 把 decodeNext() 暂存的那一帧转换输出（outW/outH 同 grabAt）。
     bool takeFrame(int outW, int outH, Frame &out, std::string &error);
@@ -73,11 +85,18 @@ public:
 
     double fps() const { return fps_; }
 
+    /// 累计跳过的坏包数（open() 之后一直累加，不清零）。
+    /// 给上层做"播放结束时的诚实汇报"用：画面是补出来的，得让用户知道。
+    int badBlocks() const { return badBlocks_; }
+    void resetBadBlocks() { badBlocks_ = 0; }
+
 private:
     void release();
     bool convertFrame(AVFrame *src, int outW, int outH, double actualSec, Frame &out,
                       std::string &error);
     void flushDecoder();
+    /// 连续坏区里的"向前跳"：整段坏了就没必要一个一个包读下去，直接 seek 越过
+    bool skipBrokenRegion();
 
     FfmpegApi *api_ = nullptr;
     AVFormatContext *fmt_ = nullptr;
@@ -96,6 +115,16 @@ private:
     int srcPixFmt_ = -1;
     int rgbW_ = 0;
     int rgbH_ = 0;
+
+    // ---- 损坏数据的容错状态（会话级，跨 decodeNext 调用累加）----
+    //
+    // 原来 badPackets 是 decodeNext() 里的局部变量，每次调用都从 0 开始数。
+    // 碰上"中间一大段全坏"的文件，外层 1500 帧循环会一遍遍进来、每遍读几十个
+    // 坏包再退出 —— 不会死循环，但白白烧 CPU，界面看着像卡住。
+    // 改成成员之后：连续坏包在**整个播放过程**里累计，攒够就直接跳过去。
+    int badBlocks_ = 0;        // 跳过的坏包总数（只增，供上层汇报）
+    int badRun_ = 0;           // 当前这串连续坏包的长度
+    int regionSkips_ = 0;      // 已经做过几次"向前跳"（有上限，防止来回横跳）
 };
 
 }  // namespace lr

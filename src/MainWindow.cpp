@@ -250,6 +250,22 @@ QString MainWindow::smokePlayState() const {
         .arg(pixmap.isNull() ? 0 : pixmap.height());
 }
 
+QString MainWindow::smokeDamageState() const {
+    const auto &s = lastPlayStats_;
+    int grabBad = 0;
+    {
+        std::lock_guard<std::mutex> lock(cutGrabberMutex_);
+        grabBad = cutGrabber_.badBlocks();
+    }
+    return QStringLiteral("取帧坏包=%1 播放坏包[视频=%2 顶替帧=%3 音频=%4 隐藏=%5 静音=%6]")
+        .arg(grabBad)
+        .arg(s.videoBadBlocks)
+        .arg(s.videoRecovered)
+        .arg(s.audioBadBlocks)
+        .arg(s.audioConcealed)
+        .arg(s.audioDropped ? QStringLiteral("是") : QStringLiteral("否"));
+}
+
 QString MainWindow::smokePreviewInfo() const {
     const QPixmap pixmap = T1preview->pixmap();
     return QStringLiteral("窗口=%1x%2 预览窗=%3x%4 画面=%5x%6 日志区高=%7")
@@ -782,7 +798,10 @@ void MainWindow::setupTimeline() {
         if (pendingFrames_.load(std::memory_order_relaxed) >= 3) return;
         pendingFrames_.fetch_add(1, std::memory_order_relaxed);
 
-        QImage image = toQImage(data.rgb, data.width, data.height);
+        // rgb 是共享指针：正常帧与"沿用上一帧"的补救帧共用同一份像素，
+        // 这里只读取，不拷贝
+        if (!data.rgb) return;
+        QImage image = toQImage(*data.rgb, data.width, data.height);
         const double sec = data.sec;
         const int token = cutToken_;
         auto guard = QPointer<MainWindow>(this);
@@ -809,12 +828,30 @@ void MainWindow::setupTimeline() {
             },
             Qt::QueuedConnection);
     });
-    player_.setEndCallback([this]() {
+    player_.setEndCallback([this](lr::FramePlayer::PlayStats stats) {
         const int epoch = playEpoch_;   // 认这次播放；晚到的旧消息会被丢掉
         auto guard = QPointer<MainWindow>(this);
-        QMetaObject::invokeMethod(this, [this, guard, epoch]() {
+        QMetaObject::invokeMethod(this, [this, guard, epoch, stats]() {
             if (!guard || epoch != playEpoch_) return;
             onPlaybackEnded();
+            lastPlayStats_ = stats;
+            // 诚实汇报：片子有损坏时告诉用户坏在哪、我们补了多少。
+            // 不然用户看到画面"卡了一下又好了"，根本不知道这份素材本身有问题。
+            if (!stats.anyDamage()) return;
+            QStringList parts;
+            if (stats.videoBadBlocks > 0)
+                parts << QStringLiteral("视频跳过 %1 个损坏包").arg(stats.videoBadBlocks);
+            if (stats.videoRecovered > 0)
+                parts << QStringLiteral("%1 段画面沿用上一帧").arg(stats.videoRecovered);
+            if (stats.audioBadBlocks > 0)
+                parts << QStringLiteral("音频跳过 %1 个损坏包").arg(stats.audioBadBlocks);
+            if (stats.audioConcealed > 0)
+                parts << QStringLiteral("%1 处声音做了隐藏补偿").arg(stats.audioConcealed);
+            if (stats.audioDropped)
+                parts << QStringLiteral("音轨损坏严重，本次播放无声音");
+            appendLog(QStringLiteral("⚠ 素材存在损坏，播放已尽量补救：%1")
+                          .arg(parts.join(QStringLiteral("，"))),
+                      lr::logcolor::kWarn);
         }, Qt::QueuedConnection);
     });
 
@@ -1100,6 +1137,7 @@ void MainWindow::loadCutSource() {
         std::array<QImage, lr::ui::TimelineWidget::kThumbCount> thumbs;
         QImage preview;
         std::string openError;
+        int badBlocks = 0;  // 取这几张图时跳过了多少损坏包
         {
             std::lock_guard<std::mutex> lock(cutGrabberMutex_);
             std::string error;
@@ -1118,10 +1156,11 @@ void MainWindow::loadCutSource() {
             } else {
                 openError = error;
             }
+            badBlocks = cutGrabber_.badBlocks();
         }
 
         QMetaObject::invokeMethod(
-            this, [this, guard, token, info, thumbs, preview, openError]() {
+            this, [this, guard, token, info, thumbs, preview, openError, badBlocks]() {
                 if (!guard || token != cutToken_) return;
                 cutLoading_ = false;
                 if (!openError.empty()) {
@@ -1157,6 +1196,13 @@ void MainWindow::loadCutSource() {
                               .arg(QFileInfo(cutSource_).fileName(),
                                    formatTimecode(info.durationSec)),
                           lr::logcolor::kOk);
+                // 导入时就发现损坏：提前打声招呼，别等用户剪到一半才发现素材有问题
+                if (badBlocks > 0) {
+                    appendLog(QStringLiteral("⚠ 这份素材有 %1 个损坏的数据包，"
+                                             "取帧时已跳过（画面可能不完整）")
+                                  .arg(badBlocks),
+                              lr::logcolor::kWarn);
+                }
 
                 // 画面已经出来了，剩下这两样慢慢算
                 startCutBackgroundAssets(token);
@@ -1354,6 +1400,9 @@ void MainWindow::stopPlayback() {
     if (!playRunning_) return;
     playRunning_ = false;
     player_.stop();
+    // 线程已 join，这时读统计是安全的：手动停止时 endCb 不会送过来
+    // （silentStop 会挡掉），所以统计得在这里自己取一次
+    lastPlayStats_ = player_.stats();
     // 队列里可能还压着几帧没执行：它们随后会被 playRunning_=false 挡掉，
     // 但背压计数要在这里归零，否则下一轮播放一上来就被当成"积压"而丢帧
     pendingFrames_.store(0, std::memory_order_relaxed);

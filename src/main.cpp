@@ -28,6 +28,7 @@
 #include "MainWindow.h"
 #include "core/Version.h"
 #include "ffmpeg/FfmpegApi.h"
+#include "platform/CrashDump.h"
 
 namespace {
 
@@ -104,6 +105,23 @@ int main(int argc, char *argv[]) {
     qInfo().noquote() << QStringLiteral("════ LRConvert %1 启动 ════")
                              .arg(QString::fromUtf8(lr::kAppVersion));
 
+    // 崩溃转储：必须尽早装，而且要装在干任何正事之前。
+    //
+    // 访问违规、栈溢出、堆损坏这类错误不走 C++ 异常 —— 线程里的 try-catch
+    // 和下面 app.exec() 的 catch(...) 全都拦不住，进程会被系统直接杀掉，
+    // 日志里连最后一行都留不下。装了这个之后，进程死之前会先把现场写成
+    // .dmp，事后打开就能看到崩在哪一行。
+    {
+        const QDir logDir = QFileInfo(logPath).dir();
+        const QString dumpDir = logDir.filePath(QStringLiteral("crashdumps"));
+        QDir().mkpath(dumpDir);
+        lr::platform::installCrashHandler(dumpDir.toStdWString(), [](const char *text) {
+            // 崩溃时 Qt 可能已经不好用了，但 qCritical 只是走 messageHandler
+            // 里的 fwrite + fflush，够朴素、也够可靠
+            qCritical().noquote() << QString::fromUtf8(text);
+        });
+    }
+
     // FFmpeg 自己的报错也接进日志：解码器抱怨了什么、哪个流坏了、
     // 哪个参数不支持 —— 这些是排查"解码出错"最直接的一手信息。
     // 不接的话它们只会打到 stderr，而 GUI 程序的 stderr 是看不见的。
@@ -121,6 +139,37 @@ int main(int argc, char *argv[]) {
 
     // 关键：排在首帧绘制之后，再开始加载动态库
     QTimer::singleShot(0, &window, &MainWindow::startAsyncInit);
+
+    // 损坏容错自检：LRCONVERT_DAMAGE_TEST=<损坏视频> 时，从坏区正前方开始播，
+    // 用来验证"播放不会被损坏数据卡住"。
+    // 常规冒烟（LRCONVERT_SMOKE_TEST）的播放区间是 0~2s / 4.9~6s，
+    // 碰不到测试片中段那片坏区，所以单独开一条时间线。
+    // 注意：这个与 LRCONVERT_SMOKE_TEST 二选一，不要同时设。
+    if (qEnvironmentVariableIsSet("LRCONVERT_DAMAGE_TEST")) {
+        const QString file = QString::fromLocal8Bit(qgetenv("LRCONVERT_DAMAGE_TEST"));
+        QTimer::singleShot(600, &window, [&window, file]() { window.smokeLoadCutFile(file); });
+        QTimer::singleShot(2500, &window, [&window]() {
+            window.smokeSetCursor(2.5);  // 坏区在 45%~51% 处，约合 2.7~3.1 秒
+            qInfo().noquote() << "[SMOKE] 坏区播放前：" << window.smokePlayState();
+            window.smokeTogglePlay();
+        });
+        QTimer::singleShot(6000, &window, [&window]() {
+            qInfo().noquote() << "[SMOKE] 坏区播放后：" << window.smokePlayState();
+            qInfo().noquote() << "[SMOKE] 坏区统计：" << window.smokeDamageState();
+        });
+        QTimer::singleShot(7000, &app, &QCoreApplication::quit);
+    }
+
+    // 崩溃转储自检钩子：LRCONVERT_CRASH_TEST=1 时故意制造一次访问违规，
+    // 用来验证「SEH → 写 .dmp → 落日志」这条链路本身是通的。
+    // 正常运行时这个环境变量不存在，永远走不到这里 —— 留着它，
+    // 是为了以后换了机器/换了编译器还能一键确认转储没失效。
+    if (qEnvironmentVariableIsSet("LRCONVERT_CRASH_TEST")) {
+        QTimer::singleShot(1500, &app, []() {
+            volatile int *bad = reinterpret_cast<volatile int *>(0);
+            *bad = 42;  // 向地址 0 写 —— 必崩，就是要崩
+        });
+    }
 
     // 冒烟测试钩子：LRCONVERT_SMOKE_TEST=1 时跑 6 秒自动退出，
     // 便于脚本/CI 验证"UI 先出 + 后台加载"这条链路（正常运行时不生效）
@@ -272,6 +321,11 @@ int main(int argc, char *argv[]) {
             QTimer::singleShot(11900, &window, [&window]() {
                 qInfo().noquote() << "[SMOKE] 拖滑块后（应已停止）："
                                   << window.smokePlayState();
+            });
+            // 损坏容错核对：坏包被跳过多少、画面顶替了几段、声音补了几处。
+            // 健康文件应该全 0；损坏文件应当"有跳过但播放照样走完"。
+            QTimer::singleShot(12500, &window, [&window]() {
+                qInfo().noquote() << "[SMOKE] 损坏统计：" << window.smokeDamageState();
             });
         }
     }

@@ -19,6 +19,9 @@ namespace {
 /// swr 单次输出的样本帧数上限（8192 帧 @48k ≈ 0.17 秒，够装下一个音频包）
 constexpr int kMaxOutFrames = 8192;
 
+/// 连续坏包到这个数就判定音轨整体解不动（交给上层放弃音频、只播画面）
+constexpr int kConsecutiveBadLimit = 300;
+
 int firstAudioStream(AVFormatContext *fmt) {
     for (unsigned i = 0; i < fmt->nb_streams; ++i) {
         if (fmt->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_AUDIO) {
@@ -144,6 +147,9 @@ bool AudioDecoder::open(FfmpegApi &api, const std::string &path, std::string &er
         audioIdx_ = -1;
         return true;
     }
+
+    badBlocks_ = 0;
+    badRun_ = 0;
     return true;
 }
 
@@ -163,10 +169,10 @@ bool AudioDecoder::seekTo(double tSec, std::string &error) {
     return true;
 }
 
-bool AudioDecoder::decodeNext(std::vector<int16_t> &pcm, double &startSec,
-                              std::string &error) {
+AudioDecoder::DecodeResult AudioDecoder::decodeNext(std::vector<int16_t> &pcm,
+                                                    double &startSec, std::string &error) {
     pcm.clear();
-    if (!hasAudio()) return false;
+    if (!hasAudio()) return DecodeResult::EndOfStream;
 
     while (api_->av_read_frame(fmt_, packet_) >= 0) {
         if (packet_->stream_index != audioIdx_) {
@@ -178,7 +184,16 @@ bool AudioDecoder::decodeNext(std::vector<int16_t> &pcm, double &startSec,
 
         const int sendRet = api_->avcodec_send_packet(codec_, packet_);
         api_->av_packet_unref(packet_);
-        if (sendRet < 0) continue;
+        if (sendRet < 0) {
+            // 坏包：跳过。连续坏到一定程度才认这条音轨救不回来了
+            ++badBlocks_;
+            if (++badRun_ >= kConsecutiveBadLimit) {
+                error = "音频数据损坏，无法继续解码";
+                return DecodeResult::Error;
+            }
+            continue;
+        }
+        badRun_ = 0;
 
         bool got = false;
         auto *out = reinterpret_cast<int16_t *>(buffer_);
@@ -214,12 +229,12 @@ bool AudioDecoder::decodeNext(std::vector<int16_t> &pcm, double &startSec,
             }
             pcm.assign(out, out + static_cast<std::size_t>(used) * kOutChannels);
             startSec = pktSec;
-            return true;
+            return DecodeResult::Ok;
         }
         // 这个包没解出采样（常见：刚 seek 完的第一个包），继续读下一个
     }
     (void)error;
-    return false;  // 读完了
+    return DecodeResult::EndOfStream;  // 文件正常读完
 }
 
 }  // namespace lr

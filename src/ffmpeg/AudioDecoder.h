@@ -47,9 +47,17 @@ public:
     /// 由调用方按 startSec 裁掉前面多出来的样本）。
     bool seekTo(double tSec, std::string &error);
 
+    /// 与 FrameGrabber::DecodeResult 同义：EndOfStream 是正常读完，
+    /// Error 是"这一个音频包坏了，后面可能还有好的" —— 播放时遇到 Error 要补一段
+    /// 静音（或做丢包隐藏）继续往下走，绝不能当成播完而停掉。
+    enum class DecodeResult { Ok, EndOfStream, Error };
+
     /// 顺序解出下一个包里的全部 PCM。startSec = 这段 PCM 对应的起始时间。
-    /// 返回 false 表示读完了（文件尾）。
-    bool decodeNext(std::vector<int16_t> &pcm, double &startSec, std::string &error);
+    DecodeResult decodeNext(std::vector<int16_t> &pcm, double &startSec, std::string &error);
+
+    /// 累计跳过的坏包数（open() 之后一直累加）
+    int badBlocks() const { return badBlocks_; }
+    void resetBadBlocks() { badBlocks_ = 0; }
 
 private:
     void release();
@@ -64,6 +72,10 @@ private:
     int bufferSamples_ = 0;       // 缓冲能装多少个"帧"（一帧 = kOutChannels 个 s16）
     int audioIdx_ = -1;
     double timeBase_ = 0.0;       // 秒 / 时间戳单位
+
+    // 与视频侧同款：坏包计数放在成员里才是"连续"的
+    int badBlocks_ = 0;
+    int badRun_ = 0;
 };
 
 }  // namespace lr

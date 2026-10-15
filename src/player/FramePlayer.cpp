@@ -3,12 +3,28 @@
 
 #include "player/FramePlayer.h"
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstring>
 #include <thread>
 
 namespace lr {
+namespace {
+
+/// 音频坏包连续到这个数就彻底放弃音轨：画面照播，别让坏音频拖着整个播放
+constexpr int kMaxAudioBadRun = 20;
+/// 视频连续补救超过这么久（秒）就判定救不回来了 —— 再拖下去只是空转
+constexpr double kMaxRecoverySec = 1.5;
+/// 丢包隐藏补多长：短了没意义，长了会听出"嗡嗡"的重复
+constexpr double kConcealMinSec = 0.005;
+constexpr double kConcealMaxSec = 0.100;
+/// 保留多长的上一包尾音用于隐藏（20ms 足够盖住一般的数据缺失）
+constexpr double kPlcTailSec = 0.020;
+
+int clampInt(int v, int lo, int hi) { return std::max(lo, std::min(v, hi)); }
+
+}  // namespace
 
 FramePlayer::FramePlayer() = default;
 
@@ -57,6 +73,16 @@ void FramePlayer::play(double fromSec, double toSec) {
     silentStop_ = false;
     pos_ = fromSec;
     playing_ = true;
+
+    // 本次播放重新开始计数：坏块统计是"从 open 起累计"的，
+    // 这里记下基线，结束时用差值才是"这次播放跳过了多少"。
+    stats_ = PlayStats{};
+    videoBadBase_ = video_.badBlocks();
+    audioBadBase_ = audio_.badBlocks();
+    lastGood_.reset();  // 换起点了，不能沿用上一次播放留下的画面
+    plcTail_.clear();
+    audioBadRun_ = 0;
+
     thread_ = std::thread([this, fromSec, toSec]() {
         // ⚠ 这层 try 是保命的：解码、sws 缩放、vector 分配都可能抛异常
         // （损坏文件、异常分辨率、内存不足），一旦让异常逃出线程函数，
@@ -67,7 +93,7 @@ void FramePlayer::play(double fromSec, double toSec) {
         } catch (...) {
             playing_ = false;
             stopAudio();
-            if (endCb_ && !silentStop_) endCb_();
+            if (endCb_ && !silentStop_) endCb_(stats_);
         }
     });
 }
@@ -87,26 +113,77 @@ void FramePlayer::threadMain(double from, double to) {
 
     if (!video_.seekTo(from, error)) {
         playing_ = false;
-        if (endCb_) endCb_();
+        if (endCb_) endCb_(stats_);
         return;
     }
     if (audio_.hasAudio()) startAudio(from);
 
+    const double frameDur = 1.0 / fps_;
     const double wallStepMs = 1000.0 / fps_;
     auto nextWall = std::chrono::steady_clock::now();
     playFrom_ = from;
 
+    // 帧坏了最多顶替多少帧：短片坏一两帧能救回来，整段坏掉就别硬撑
+    const int maxRecovery = std::max(15, static_cast<int>(kMaxRecoverySec * fps_));
+    int recoveryRun = 0;  // 已经连续用上一帧顶了几帧
+
+    // 按帧率睡到下一帧该出现的时刻；解码本身就慢（掉帧）时不要把 nextWall
+    // 越推越远，直接以当前时间为基准重新起算。
+    const auto sleepToNext = [&]() {
+        nextWall += std::chrono::microseconds(static_cast<long long>(wallStepMs * 1000.0));
+        const auto now = std::chrono::steady_clock::now();
+        if (nextWall > now) {
+            std::this_thread::sleep_until(nextWall);
+        } else {
+            nextWall = now;
+        }
+    };
+
     while (!stopFlag_) {
         lr::FrameGrabber::Frame frame;
-        if (!video_.grabNext(outW_, outH_, frame, error)) break;  // 读完了
-        if (frame.actualSec > to) break;                          // 播过终点了
+        const lr::FrameGrabber::DecodeResult r = video_.grabNext(outW_, outH_, frame, error);
+
+        if (r == lr::FrameGrabber::DecodeResult::EndOfStream) break;  // 真的播完了
+
+        if (r == lr::FrameGrabber::DecodeResult::Error) {
+            // 这一帧没解出来 —— 但**播放绝不能就此停下**。
+            //
+            // 损坏文件里这是家常便饭：一个 GOP 坏了，后面全是好的。
+            // 以前的写法把 Error 和 EndOfStream 一视同仁地 break，于是播放
+            // 到坏块处就"自然结束"，用户只看到播放莫名停住，还以为软件有毛病。
+            // 正确做法是沿用上一张好画面、时间继续往前走，等坏区过去自然接上。
+            if (lastGood_ == nullptr || ++recoveryRun > maxRecovery) break;  // 实在救不回来
+
+            FrameData data;
+            data.rgb = lastGood_;  // 共享，零拷贝
+            data.width = lastGoodW_;
+            data.height = lastGoodH_;
+            data.sec = lastGoodSec_ + frameDur * recoveryRun;
+            ++stats_.videoRecovered;
+            pos_ = data.sec;
+            if (frameCb_) frameCb_(std::move(data));
+            if (audioActive_) pumpAudio(pos_ + 0.25);
+            sleepToNext();
+            continue;
+        }
+
+        recoveryRun = 0;
+        if (frame.actualSec > to) break;  // 播过终点了
         // seek 只能落在关键帧上，开头几帧会早于起点（本片关键帧间隔 1 秒，
         // 从 5.9s 起播时第一帧其实是 5.0s 的关键帧）。这些帧必须丢掉，
         // 否则画面会先往回退一大截再往下播。
         if (frame.actualSec < playFrom_ - 1e-6) continue;
 
+        // 存一份共享引用：坏块处要靠它顶上去（不拷贝像素，只是多一个引用）
+        std::shared_ptr<const std::vector<uint8_t>> buf =
+            std::make_shared<std::vector<uint8_t>>(std::move(frame.rgb));
+        lastGood_ = buf;
+        lastGoodW_ = frame.width;
+        lastGoodH_ = frame.height;
+        lastGoodSec_ = frame.actualSec;
+
         FrameData data;
-        data.rgb = std::move(frame.rgb);
+        data.rgb = std::move(buf);
         data.width = frame.width;
         data.height = frame.height;
         data.sec = frame.actualSec;
@@ -118,22 +195,17 @@ void FramePlayer::threadMain(double from, double to) {
         // 音频补齐到"当前帧再往后 0.25 秒"，留一点余量吸收抖动
         if (audioActive_) pumpAudio(frame.actualSec + 0.25);
 
-        // 按帧率睡到下一帧该出现的时刻；如果解码本身就慢（掉帧），
-        // 不要把 nextWall 越推越远，直接以当前时间为基准重新起算。
-        nextWall += std::chrono::microseconds(static_cast<long long>(wallStepMs * 1000.0));
-        const auto now = std::chrono::steady_clock::now();
-        if (nextWall > now) {
-            std::this_thread::sleep_until(nextWall);
-        } else {
-            nextWall = now;
-        }
+        sleepToNext();
     }
 
     playing_ = false;
     stopAudio();
+    // 收尾：把累计计数换算成"本次播放"的增量
+    stats_.videoBadBlocks = video_.badBlocks() - videoBadBase_;
+    stats_.audioBadBlocks = audio_.badBlocks() - audioBadBase_;
     // 主动 stop() 的那次不汇报：UI 自己发起的停止它自己知道，
     // 这条消息晚到一步会把紧接着的"重播"状态误清掉
-    if (endCb_ && !silentStop_) endCb_();
+    if (endCb_ && !silentStop_) endCb_(stats_);
 }
 
 // ---------------- 音频 ----------------
@@ -165,7 +237,22 @@ void FramePlayer::pumpAudio(double untilSec) {
     for (int guard = 0; guard < 512 && audioSec_ < untilSec; ++guard) {
         std::vector<int16_t> pcm;
         double startSec = 0.0;
-        if (!audio_.decodeNext(pcm, startSec, error)) break;
+        const lr::AudioDecoder::DecodeResult r = audio_.decodeNext(pcm, startSec, error);
+
+        if (r == lr::AudioDecoder::DecodeResult::EndOfStream) break;  // 音轨播完了
+
+        if (r == lr::AudioDecoder::DecodeResult::Error) {
+            // 音频包坏了：补一段隐藏音（不是干等着），时间继续走。
+            // 只有连续坏到一定程度才放弃音轨 —— 画面照播，只是没声音。
+            if (++audioBadRun_ >= kMaxAudioBadRun) {
+                audioActive_ = false;
+                stats_.audioDropped = true;
+                break;
+            }
+            concealAudioDrop(lastAudioDur_);
+            continue;
+        }
+        audioBadRun_ = 0;
         if (pcm.empty()) continue;
 
         // 少数容器/流的音频包没有时间戳：这时 startSec 是 -1，
@@ -184,6 +271,17 @@ void FramePlayer::pumpAudio(double untilSec) {
         const int frames = totalFrames - offset;
         audioSec_ = endSec;
 
+        lastAudioDur_ = double(totalFrames) / rate;
+
+        // 留一小段尾音：音频包坏掉时用它做丢包隐藏（见 concealAudioDrop）
+        const std::size_t wantTail =
+            static_cast<std::size_t>(rate * kPlcTailSec) * audio_.channels();
+        if (pcm.size() >= wantTail) {
+            plcTail_.assign(pcm.end() - static_cast<long>(wantTail), pcm.end());
+        } else {
+            plcTail_ = pcm;
+        }
+
         if (frames <= 0) continue;
         if (!audioOut_.write(pcm.data() + static_cast<std::size_t>(offset) *
                                               audio_.channels(),
@@ -192,6 +290,36 @@ void FramePlayer::pumpAudio(double untilSec) {
             break;
         }
     }
+}
+
+void FramePlayer::concealAudioDrop(double durationSec) {
+    if (!audioActive_) return;
+    const double rate = static_cast<double>(audio_.sampleRate());
+    if (rate <= 0.0) return;
+
+    const int wanted = static_cast<int>(durationSec * rate);
+    const int frames = clampInt(wanted, static_cast<int>(rate * kConcealMinSec),
+                                static_cast<int>(rate * kConcealMaxSec));
+    std::vector<int16_t> pcm(static_cast<std::size_t>(frames) * audio_.channels(), 0);
+
+    // 丢包隐藏（PLC）：把上一段的尾音搬过来并衰减到 0。
+    // 比硬切静音自然得多 —— 静音会在坏块处留下明显的"咔哒"和空洞感，
+    // 衰减尾音听着只是声音"闷了一下"，绝大多数人听不出来。
+    if (!plcTail_.empty()) {
+        const std::size_t tailFrames = plcTail_.size() / audio_.channels();
+        const std::size_t n = std::min(static_cast<std::size_t>(frames), tailFrames);
+        for (std::size_t i = 0; i < n; ++i) {
+            const double g = 1.0 - double(i) / double(n);  // 线性衰减
+            for (int c = 0; c < audio_.channels(); ++c) {
+                const double s = double(plcTail_[i * audio_.channels() + c]) * g;
+                pcm[i * audio_.channels() + c] = static_cast<int16_t>(s);
+            }
+        }
+    }
+
+    audioSec_ += double(frames) / rate;
+    ++stats_.audioConcealed;
+    audioOut_.write(pcm.data(), frames, 40);
 }
 
 }  // namespace lr

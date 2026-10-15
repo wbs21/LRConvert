@@ -16,6 +16,19 @@
 namespace lr {
 namespace {
 
+// ---- 损坏数据的容错阈值 ----
+//
+// 单个坏包就跳过，但连续坏到一定程度要换策略：
+//   · kBadRunBeforeSkip：这一串坏包攒到这么长，说明是成片坏的 —— 直接 seek 越过，
+//     不再一个一个读。实测"中间被填成 0xFF"的文件会连续几千个包全废，
+//     逐包读的话界面要空转好几秒。
+//   · kConsecutiveBadLimit：seek 也跳不动时才认命，判定整条流解不动。
+//   · kMaxRegionSkips：一次 open 里最多跳这么多次，防止在坏区里来回横跳。
+constexpr int kBadRunBeforeSkip = 64;
+constexpr int kConsecutiveBadLimit = 300;
+constexpr double kSkipSeconds = 1.0;
+constexpr int kMaxRegionSkips = 20;
+
 int firstVideoStream(AVFormatContext *fmt) {
     for (unsigned i = 0; i < fmt->nb_streams; ++i) {
         if (fmt->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_VIDEO) {
@@ -98,6 +111,17 @@ bool FrameGrabber::open(FfmpegApi &api, const std::string &path, std::string &er
         return false;
     }
     codec_->pkt_timebase = stream->time_base;
+
+    // 错误隐藏：让解码器主动去补残缺的宏块，而不是把整帧判死。
+    //
+    // GUESS_MVS = 用周边的运动矢量外推补洞，DEBLOCK = 对补出来的区域做去块滤波。
+    // 开完之后坏块处常见的是"局部糊一块"，而不是整帧变绿或者干脆整帧丢失。
+    //
+    // 反面教材：千万不要设 AV_EF_EXPLODE —— 它会让解码器把轻微错误当成致命错误，
+    // 本来还能出画面的帧也一并返回失败，画面反而烂得更快。err_recognition 保持
+    // 默认的 AV_EF_DEFAULT 就好。
+    codec_->error_concealment = FF_EC_GUESS_MVS | FF_EC_DEBLOCK;
+
     ret = api.avcodec_open2(codec_, codec, nullptr);
     if (ret < 0) {
         error = api.errorText(ret);
@@ -116,6 +140,31 @@ bool FrameGrabber::open(FfmpegApi &api, const std::string &path, std::string &er
     srcW_ = codec_->width;
     srcH_ = codec_->height;
     srcPixFmt_ = codec_->pix_fmt;
+
+    badBlocks_ = 0;
+    badRun_ = 0;
+    regionSkips_ = 0;
+    return true;
+}
+
+bool FrameGrabber::skipBrokenRegion() {
+    if (fmt_ == nullptr || videoIdx_ < 0 || regionSkips_ >= kMaxRegionSkips) return false;
+
+    // 当前读到哪儿？用解封装层的下一个包的时间戳当基准（拿不到就按上次的位置推）
+    const int64_t curTs = (packet_->pts != AV_NOPTS_VALUE)   ? packet_->pts
+                          : (packet_->dts != AV_NOPTS_VALUE) ? packet_->dts
+                                                             : -1;
+    double curSec = -1.0;
+    if (curTs != AV_NOPTS_VALUE) curSec = double(curTs) * timeBase_;
+    if (curSec < 0.0) return false;  // 时间戳也没有，没法跳，只能老实往下读
+
+    const double target = curSec + kSkipSeconds;
+    const int64_t targetTs = static_cast<int64_t>(std::llround(target / timeBase_));
+    if (api_->avformat_seek_file(fmt_, videoIdx_, INT64_MIN, targetTs, targetTs, 0) < 0) {
+        return false;
+    }
+    ++regionSkips_;
+    flushDecoder();
     return true;
 }
 
@@ -218,14 +267,13 @@ void FrameGrabber::dropFrame() {
     }
 }
 
-bool FrameGrabber::decodeNext(double &secOut, std::string &error) {
+FrameGrabber::DecodeResult FrameGrabber::decodeNext(double &secOut, std::string &error) {
     dropFrame();  // 上一帧没取走就先释放，别泄漏解码帧
     if (fmt_ == nullptr || codec_ == nullptr) {
         error = "取帧器尚未打开";
-        return false;
+        return DecodeResult::Error;
     }
 
-    int badPackets = 0;
     while (api_->av_read_frame(fmt_, packet_) >= 0) {
         if (packet_->stream_index != videoIdx_) {
             api_->av_packet_unref(packet_);
@@ -234,15 +282,27 @@ bool FrameGrabber::decodeNext(double &secOut, std::string &error) {
         const int sendRet = api_->avcodec_send_packet(codec_, packet_);
         api_->av_packet_unref(packet_);
         if (sendRet < 0) {
-            // 单个坏包正常（损坏文件里常有），但连续几百个都失败
-            // 说明这条流根本解不动了 —— 继续空转只会让界面假死、CPU 跑满
-            if (++badPackets >= 300) {
+            // 单个坏包很正常（损坏文件里到处都是），跳过它就是了。
+            ++badBlocks_;
+            ++badRun_;
+
+            // 退让：攒到一定数量说明这一段是成片坏的，一个一个包读下去纯属空转。
+            // 直接 seek 越过这一片，比继续读快得多，也不会让 CPU 长时间跑满。
+            if (badRun_ == kBadRunBeforeSkip) {
+                if (skipBrokenRegion()) {
+                    badRun_ = 0;
+                    continue;
+                }
+            }
+            // 跳不动（seek 失败 / 超过跳过次数上限 / 没有时间戳）才会走到这里：
+            // 连续几百个全失败，说明这条流真的解不动了，那就认了。
+            if (badRun_ >= kConsecutiveBadLimit) {
                 error = "视频数据损坏，无法继续解码";
-                return false;
+                return DecodeResult::Error;
             }
             continue;
         }
-        badPackets = 0;
+        badRun_ = 0;  // 解出一个好包，这串坏包就算过去了
 
         const int recvRet = api_->avcodec_receive_frame(codec_, frame_);
         if (recvRet < 0) {
@@ -254,9 +314,9 @@ bool FrameGrabber::decodeNext(double &secOut, std::string &error) {
         secOut = frameSec;
         heldSec_ = frameSec;
         frameHeld_ = true;
-        return true;
+        return DecodeResult::Ok;
     }
-    return false;  // 读完了（或读不出视频帧）
+    return DecodeResult::EndOfStream;  // 文件正常读完 —— 不是错误
 }
 
 bool FrameGrabber::takeFrame(int outW, int outH, Frame &out, std::string &error) {
@@ -266,10 +326,13 @@ bool FrameGrabber::takeFrame(int outW, int outH, Frame &out, std::string &error)
     return ok;
 }
 
-bool FrameGrabber::grabNext(int outW, int outH, Frame &out, std::string &error) {
+FrameGrabber::DecodeResult FrameGrabber::grabNext(int outW, int outH, Frame &out,
+                                                  std::string &error) {
     double sec = 0.0;
-    if (!decodeNext(sec, error)) return false;
-    return takeFrame(outW, outH, out, error);
+    const DecodeResult r = decodeNext(sec, error);
+    if (r != DecodeResult::Ok) return r;
+    if (!takeFrame(outW, outH, out, error)) return DecodeResult::Error;
+    return DecodeResult::Ok;
 }
 
 bool FrameGrabber::grabAt(double tSec, int outW, int outH, Frame &out, std::string &error) {
@@ -285,7 +348,10 @@ bool FrameGrabber::grabAt(double tSec, int outW, int outH, Frame &out, std::stri
     // （长视频几万帧），界面不卡但 CPU 会长时间跑满、风扇狂转。
     // 超过限额就用已经拿到的最后一帧，好过一直转下去。
     for (int guard = 0; guard < 1500; ++guard) {
-        if (!grabNext(outW, outH, frame, error)) break;
+        const DecodeResult r = grabNext(outW, outH, frame, error);
+        // Error 也要 break：定位取帧没有"接着往下碰运气"的余地，
+        // 能拿到 fallback 就用 fallback，拿不到就算失败（上层显示占位图）
+        if (r != DecodeResult::Ok) break;
         if (frame.actualSec >= 0.0 && (frame.actualSec + tolerance) >= tSec) {
             out = std::move(frame);
             return true;

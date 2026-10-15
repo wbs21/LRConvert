@@ -141,6 +141,9 @@ if(Qt6_FOUND)
         # 窗口外框查询（BUG-001：还原后把标题栏拉回可见区；内部用 Win32，隔离在这里）
         src/platform/WindowFrame.h
         src/platform/WindowFrame.cpp
+        # 崩溃转储（SEH / std::terminate / abort → 写 .dmp；内部用 Win32，同上）
+        src/platform/CrashDump.h
+        src/platform/CrashDump.cpp
         resources/app.qrc
     )
     target_link_libraries(LRConvert PRIVATE
