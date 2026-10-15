@@ -221,6 +221,8 @@ private:
     bool playUpdatingCursor_ = false;
     /// 播放是被"用户在影片条上点了别处"打断的：松手后要立刻从新位置重播
     bool playInterruptedByUser_ = false;
+    /// 已投递给 GUI 线程、还没被执行的帧数（播放背压用，见帧回调处的说明）
+    std::atomic<int> pendingFrames_{0};
     bool cutLoaded_ = false;
     bool cutLoading_ = false;
     int cutPeaksToken_ = 0;               ///< 只认最后一次发起的波形计算

@@ -11,6 +11,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <string>
 
 namespace lr {
 namespace {
@@ -133,6 +134,18 @@ bool FrameGrabber::convertFrame(AVFrame *src, int outW, int outH, double actualS
     const int dstW = (outW > 0) ? outW : src->width;
     const int dstH = (outH > 0) ? outH : src->height;
 
+    // 尺寸兜底：损坏文件或异常分辨率会给出离谱的宽高，
+    // 下面 resize(dstW*dstH*3) 要么溢出 size_t、要么直接抛 bad_alloc。
+    // 与其让它炸，不如在这里就判掉并返回错误。
+    if (dstW <= 0 || dstH <= 0 || dstW > 16384 || dstH > 16384) {
+        error = "视频帧尺寸异常：" + std::to_string(dstW) + "x" + std::to_string(dstH);
+        return false;
+    }
+    if (src->width <= 0 || src->height <= 0) {
+        error = "解码出的帧为空";
+        return false;
+    }
+
     sws_ = api_->sws_getCachedContext(sws_, src->width, src->height,
                                       static_cast<int>(src->format), dstW, dstH,
                                       AV_PIX_FMT_RGB24, SWS_BILINEAR, nullptr, nullptr, nullptr);
@@ -212,6 +225,7 @@ bool FrameGrabber::decodeNext(double &secOut, std::string &error) {
         return false;
     }
 
+    int badPackets = 0;
     while (api_->av_read_frame(fmt_, packet_) >= 0) {
         if (packet_->stream_index != videoIdx_) {
             api_->av_packet_unref(packet_);
@@ -219,7 +233,16 @@ bool FrameGrabber::decodeNext(double &secOut, std::string &error) {
         }
         const int sendRet = api_->avcodec_send_packet(codec_, packet_);
         api_->av_packet_unref(packet_);
-        if (sendRet < 0) continue;
+        if (sendRet < 0) {
+            // 单个坏包正常（损坏文件里常有），但连续几百个都失败
+            // 说明这条流根本解不动了 —— 继续空转只会让界面假死、CPU 跑满
+            if (++badPackets >= 300) {
+                error = "视频数据损坏，无法继续解码";
+                return false;
+            }
+            continue;
+        }
+        badPackets = 0;
 
         const int recvRet = api_->avcodec_receive_frame(codec_, frame_);
         if (recvRet < 0) {
@@ -258,7 +281,11 @@ bool FrameGrabber::grabAt(double tSec, int outW, int outH, Frame &out, std::stri
     Frame fallback;
     Frame frame;
 
-    while (grabNext(outW, outH, frame, error)) {
+    // 有硬上限：seek 失败或时间戳乱掉时，这个循环会一路解到文件尾
+    // （长视频几万帧），界面不卡但 CPU 会长时间跑满、风扇狂转。
+    // 超过限额就用已经拿到的最后一帧，好过一直转下去。
+    for (int guard = 0; guard < 1500; ++guard) {
+        if (!grabNext(outW, outH, frame, error)) break;
         if (frame.actualSec >= 0.0 && (frame.actualSec + tolerance) >= tSec) {
             out = std::move(frame);
             return true;

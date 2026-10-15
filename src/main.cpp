@@ -14,11 +14,75 @@
 // ---------------------------------------------------------------------------
 
 #include <QApplication>
+#include <QDateTime>
+#include <QDir>
+#include <QFileInfo>
 #include <QIcon>
+#include <QMessageBox>
+#include <QStandardPaths>
 #include <QTimer>
+
+#include <cstdio>
+#include <exception>
 
 #include "MainWindow.h"
 #include "core/Version.h"
+#include "ffmpeg/FfmpegApi.h"
+
+namespace {
+
+// ---------------------------------------------------------------------------
+// 把 Qt 日志同时落一份到文件
+//
+// 目的很实际：程序在用户机器上"突然没了"的时候，光凭一句"刚才退出了"
+// 是查不出原因的。有了这份日志，至少能看到退出前最后几行在做什么
+// （在解哪个文件、波形算到第几段、播放到哪一秒）。
+// ---------------------------------------------------------------------------
+std::FILE *g_logFile = nullptr;
+
+QString logFilePath() {
+    // 优先写在程序旁边：发布包是解压即用的，日志就在 exe 同级的 logs/ 里，
+    // 找起来最直观。写不进去（比如放在 Program Files 下）就退回临时目录。
+    const QString beside = QCoreApplication::applicationDirPath() + QStringLiteral("/logs");
+    if (QDir().mkpath(beside) && QFileInfo(beside).isWritable()) {
+        return beside + QStringLiteral("/LRConvert.log");
+    }
+    const QString fallback =
+        QStandardPaths::writableLocation(QStandardPaths::TempLocation) +
+        QStringLiteral("/LRConvert");
+    QDir().mkpath(fallback);
+    return fallback + QStringLiteral("/LRConvert.log");
+}
+
+void messageHandler(QtMsgType type, const QMessageLogContext &, const QString &msg) {
+    const char *tag = "";
+    switch (type) {
+    case QtDebugMsg:    tag = "[D] "; break;
+    case QtInfoMsg:     tag = "[I] "; break;
+    case QtWarningMsg:  tag = "[W] "; break;
+    case QtCriticalMsg: tag = "[C] "; break;
+    case QtFatalMsg:    tag = "[F] "; break;
+    }
+    const QString line =
+        QStringLiteral("%1%2  %3\n")
+            .arg(QString::fromUtf8(tag),
+                 QDateTime::currentDateTime().toString(QStringLiteral("yyyy-MM-dd hh:mm:ss.zzz")),
+                 msg);
+
+    if (g_logFile != nullptr) {
+        const QByteArray bytes = line.toLocal8Bit();
+        std::fwrite(bytes.constData(), 1, static_cast<std::size_t>(bytes.size()), g_logFile);
+        // 必须立刻 flush：进程要是崩了，还留在缓冲区里的那几行就永远看不到了，
+        // 而那往往正是最接近崩溃现场的那几行
+        std::fflush(g_logFile);
+    }
+    // 控制台照常输出（冒烟与回归脚本就是靠读 stderr 拿 [SMOKE] 行的）
+    const QByteArray out = line.toLocal8Bit();
+    std::fwrite(out.constData(), 1, static_cast<std::size_t>(out.size()), stderr);
+    std::fflush(stderr);
+}
+
+}  // namespace
 
 int main(int argc, char *argv[]) {
     QApplication app(argc, argv);
@@ -28,6 +92,29 @@ int main(int argc, char *argv[]) {
     app.setWindowIcon(QIcon(QStringLiteral(":/LRconvert.ico")));
     app.setApplicationVersion(QString::fromUtf8(lr::kAppVersion));
     app.setOrganizationName(QStringLiteral("wbs21"));
+
+    // 日志落盘：追加写，但超过 2MB 就重来一份，免得无限长大
+    const QString logPath = logFilePath();
+    {
+        const QFileInfo fi(logPath);
+        const bool tooBig = fi.exists() && fi.size() > 2 * 1024 * 1024;
+        g_logFile = std::fopen(logPath.toLocal8Bit().constData(), tooBig ? "w" : "a");
+    }
+    qInstallMessageHandler(messageHandler);
+    qInfo().noquote() << QStringLiteral("════ LRConvert %1 启动 ════")
+                             .arg(QString::fromUtf8(lr::kAppVersion));
+
+    // FFmpeg 自己的报错也接进日志：解码器抱怨了什么、哪个流坏了、
+    // 哪个参数不支持 —— 这些是排查"解码出错"最直接的一手信息。
+    // 不接的话它们只会打到 stderr，而 GUI 程序的 stderr 是看不见的。
+    // 注意：FfmpegApi 在全局命名空间（它不依赖 Qt，也没跟其它模块一样
+    // 放进 lr:: ），所以这里不写 lr::
+    FfmpegApi::setLogSink([](int level, const char *msg) {
+        // FFmpeg 级别：数字越小越严重，16=错误、24=警告（已在上游压到 24）
+        const QString tag = (level <= 16) ? QStringLiteral("[FFmpeg/错误]")
+                                          : QStringLiteral("[FFmpeg/警告]");
+        qWarning().noquote() << tag << QString::fromUtf8(msg);
+    });
 
     MainWindow window;
     window.show();
@@ -189,5 +276,34 @@ int main(int argc, char *argv[]) {
         }
     }
 
-    return app.exec();
+    // 最后一道兜底：事件循环里要是真漏出异常来（Qt 自己不用异常，但
+    // std::vector / std::string 的分配失败、第三方库都可能抛），
+    // 默认行为是 std::terminate() —— 窗口直接消失，什么都不说。
+    // 这里至少把原因打出来，也让日志留下最后一行。
+    int rc = 0;
+    try {
+        rc = app.exec();
+    } catch (const std::exception &e) {
+        qCritical().noquote() << QStringLiteral("未捕获异常，程序即将退出：")
+                              << QString::fromUtf8(e.what());
+        QMessageBox::critical(nullptr, QStringLiteral("程序异常"),
+                              QStringLiteral("发生了未处理的异常，程序即将退出。\n\n%1\n\n"
+                                             "详细信息已写入日志文件：\n%2")
+                                  .arg(QString::fromUtf8(e.what()), logPath));
+        rc = 1;
+    } catch (...) {
+        qCritical().noquote() << QStringLiteral("未捕获的未知异常，程序即将退出");
+        QMessageBox::critical(nullptr, QStringLiteral("程序异常"),
+                              QStringLiteral("发生了未处理的异常，程序即将退出。\n\n"
+                                             "详细信息已写入日志文件：\n%1")
+                                  .arg(logPath));
+        rc = 1;
+    }
+
+    qInfo().noquote() << QStringLiteral("════ 正常退出（%1）════").arg(rc);
+    if (g_logFile != nullptr) {
+        std::fclose(g_logFile);
+        g_logFile = nullptr;
+    }
+    return rc;
 }

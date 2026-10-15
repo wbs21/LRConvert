@@ -79,7 +79,14 @@ bool WaveformBuilder::start(FfmpegApi &api, const std::string &path, double dura
     stopFlag_ = false;
     running_ = true;
     for (int i = 0; i < workers; ++i) {
-        threads_.emplace_back([this, &api, path]() { workerMain(&api, path); });
+        threads_.emplace_back([this, &api, path]() {
+            // 同 FramePlayer：异常逃出线程就是 std::terminate()，整个进程没了。
+            // 一个 worker 挂掉不影响别的 —— 剩下的段还会被其他 worker 领走。
+            try {
+                workerMain(&api, path);
+            } catch (...) {
+            }
+        });
     }
     return true;
 }

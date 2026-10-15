@@ -4,8 +4,10 @@
 #include "FfmpegApi.h"
 
 #include <chrono>
+#include <cstdarg>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <vector>
 
 #ifdef _WIN32
@@ -17,6 +19,47 @@
 #endif
 
 namespace {
+
+// ---------------- FFmpeg 内部日志的桥接 ----------------
+
+void (*g_logSink)(int, const char *) = nullptr;
+int g_logLevel = 24;  // AV_LOG_WARNING，与 load() 里 av_log_set_level 保持一致
+int g_logCount = 0;   // 已产生的 FFmpeg 消息条数（限流用）
+
+void ffmpegLogBridge(void *, int level, const char *fmt, va_list vl) {
+    // ⚠ 这一行不能省：FFmpeg 的 av_vlog() 拿到回调就**直接调用**，
+    // 级别过滤只存在于它那个默认回调里。换成自定义回调后如果不自己判断，
+    // 硬件探测那堆 AV_LOG_INFO 的 "Loaded lib: nvcuda.dll" 会全涌进来，
+    // 一次启动就能刷出几万行（实测 56083 条），把日志文件撑爆。
+    if (level > g_logLevel) return;
+
+    char buf[1024];
+    std::vsnprintf(buf, sizeof(buf), fmt, vl);
+    buf[sizeof(buf) - 1] = '\0';
+    // FFmpeg 的消息自带结尾换行，去掉它（交给日志那层统一加）
+    std::size_t n = std::strlen(buf);
+    while (n > 0 && (buf[n - 1] == '\n' || buf[n - 1] == '\r')) buf[--n] = '\0';
+
+    // 限流：一个坏文件会源源不断地报同一个错，几万条同样的日志既没参考价值
+    // 又拖慢程序。前 100 条照实记，之后每 100 条汇总一次。
+    const int seq = ++g_logCount;
+    char out[1152];
+    if (seq <= 100) {
+        std::snprintf(out, sizeof(out), "%s", buf);
+    } else if (seq % 100 == 0) {
+        std::snprintf(out, sizeof(out), "%s  …（此后已抑制 %d 条同类 FFmpeg 消息）",
+                      buf, seq - 100);
+    } else {
+        return;
+    }
+
+    if (g_logSink != nullptr) {
+        g_logSink(level, out);
+    } else {
+        std::fprintf(stderr, "[FFmpeg] %s\n", out);
+        std::fflush(stderr);
+    }
+}
 
 // ---------------- 平台无关的动态库装载封装 ----------------
 
@@ -311,7 +354,10 @@ bool FfmpegApi::load(std::string &error) {
 #undef LR_BIND_FN
 
     // 3) 初始化（日志级别压到 warning，避免 stderr 刷屏；网络组件可选）
-    av_log_set_level(24);  // AV_LOG_WARNING
+    av_log_set_level(g_logLevel = 24);  // AV_LOG_WARNING（桥接里也要用，故存一份）
+    // 把 FFmpeg 的报错接到我们自己的日志上：解码器抱怨了什么、
+    // 哪个流有问题，都会进程序日志文件，而不是飘在看不见的 stderr 里
+    av_log_set_callback(ffmpegLogBridge);
     avformat_network_init();
 
     loaded_ = true;
@@ -352,4 +398,8 @@ std::string FfmpegApi::errorText(int code) const {
     char buf[256]{};
     if (av_strerror(code, buf, sizeof(buf)) < 0) return "libav 错误码 " + std::to_string(code);
     return std::string(buf);
+}
+
+void FfmpegApi::setLogSink(void (*sink)(int, const char *)) {
+    g_logSink = sink;  // 匿名 namespace 里的全局，dlopen 前后设置都行
 }

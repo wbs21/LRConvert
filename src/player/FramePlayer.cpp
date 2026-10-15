@@ -39,6 +39,10 @@ bool FramePlayer::open(FfmpegApi &api, const std::string &path, double fps, int 
 }
 
 void FramePlayer::close() {
+    // 必须先收线程：video_ / audio_ 就在播放线程里被用着，
+    // 直接释放等于让它在已析构的对象上继续解码。
+    // （open() 里 stop + close 是成对写的，但 close() 单独被调用时也要安全。）
+    stop();
     stopAudio();
     audio_.close();
     video_.close();
@@ -53,7 +57,19 @@ void FramePlayer::play(double fromSec, double toSec) {
     silentStop_ = false;
     pos_ = fromSec;
     playing_ = true;
-    thread_ = std::thread([this, fromSec, toSec]() { threadMain(fromSec, toSec); });
+    thread_ = std::thread([this, fromSec, toSec]() {
+        // ⚠ 这层 try 是保命的：解码、sws 缩放、vector 分配都可能抛异常
+        // （损坏文件、异常分辨率、内存不足），一旦让异常逃出线程函数，
+        // C++ 运行时会直接 std::terminate() —— 整个进程瞬间消失，
+        // 没有日志、没有崩溃对话框。宁可安静地当成"播完了"。
+        try {
+            threadMain(fromSec, toSec);
+        } catch (...) {
+            playing_ = false;
+            stopAudio();
+            if (endCb_ && !silentStop_) endCb_();
+        }
+    });
 }
 
 void FramePlayer::stop() {
@@ -140,12 +156,22 @@ void FramePlayer::stopAudio() {
 void FramePlayer::pumpAudio(double untilSec) {
     std::string error;
     const double rate = static_cast<double>(audio_.sampleRate());
+    if (rate <= 0.0) return;
 
-    while (audioSec_ < untilSec) {
+    // 有硬上限的循环：正常一次只补几个包（约 0.25 秒的音频）。
+    // 但万一上游给的时间戳有问题（比如整轨都没 pts，startSec 恒为负），
+    // audioSec_ 就不会往前走 —— 没有这个上限的话，这里会一口气把整条音轨
+    // 全部读完，播放线程卡死在这一句上，界面直接假死。
+    for (int guard = 0; guard < 512 && audioSec_ < untilSec; ++guard) {
         std::vector<int16_t> pcm;
         double startSec = 0.0;
         if (!audio_.decodeNext(pcm, startSec, error)) break;
         if (pcm.empty()) continue;
+
+        // 少数容器/流的音频包没有时间戳：这时 startSec 是 -1，
+        // 不能拿它推进 audioSec_（会变负、且永远追不上 untilSec）。
+        // 按"紧接上一段之后"估算一个位置，至少保证循环能往前走。
+        if (startSec < 0.0) startSec = audioSec_;
 
         const int totalFrames = static_cast<int>(pcm.size()) / audio_.channels();
         const double endSec = startSec + double(totalFrames) / rate;

@@ -9,6 +9,7 @@
 #include <libavutil/samplefmt.h>
 #include <libswresample/swresample.h>
 
+#include <algorithm>
 #include <cmath>
 #include <cstring>
 
@@ -194,7 +195,9 @@ bool AudioDecoder::decodeNext(std::vector<int16_t> &pcm, double &startSec,
                     swr_, &dst, space, const_cast<const uint8_t **>(frame_->data),
                     frame_->nb_samples);
                 if (produced > 0) {
-                    used += produced;
+                    // 必须钳到剩余空间：swr 一旦给出多于请求的样本数，
+                    // used 就会越过缓冲区末尾，下一轮的写地址直接飞出去了
+                    used += std::min(produced, space);
                     got = true;
                 }
             }
@@ -207,7 +210,7 @@ bool AudioDecoder::decodeNext(std::vector<int16_t> &pcm, double &startSec,
             if (space > 0) {
                 uint8_t *dst = reinterpret_cast<uint8_t *>(out + used * kOutChannels);
                 int produced = api_->swr_convert(swr_, &dst, space, nullptr, 0);
-                if (produced > 0) used += produced;
+                if (produced > 0) used += std::min(produced, space);
             }
             pcm.assign(out, out + static_cast<std::size_t>(used) * kOutChannels);
             startSec = pktSec;

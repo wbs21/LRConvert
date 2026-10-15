@@ -45,6 +45,15 @@ public:
     /// av_strerror 封装：把 libav* 的错误码变成人话
     std::string errorText(int code) const;
 
+    /// 设置 FFmpeg 内部日志的接收器（level 就是 FFmpeg 的 AV_LOG_*，
+    /// 数字越小越严重：16=错误、24=警告）。不设就照原样打到 stderr。
+    ///
+    /// 设了的话，"解码器报了什么错"就能进程序自己的日志文件 ——
+    /// 排查"解码出错导致退出"这类问题时，这是最有用的一手信息，
+    /// 否则 FFmpeg 的报错只会飘在 GUI 程序看不见的 stderr 里。
+    /// 可以在 load() 之前调用（只是先存下一个函数指针）。
+    static void setLogSink(void (*sink)(int level, const char *msg));
+
     // ---- 函数指针表（由宏表展开，勿手写） ----
 #define LR_DECLARE_FN(lib, ret, name, args) ret(*name) args = nullptr;
     FFMPEG_FN_LIST(LR_DECLARE_FN)

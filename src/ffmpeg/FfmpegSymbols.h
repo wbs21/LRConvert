@@ -18,6 +18,7 @@
 //      毫不相关的地方（"expected constructor before '('"），极难排查。
 // ---------------------------------------------------------------------------
 
+#include <cstdarg>
 #include <cstddef>
 #include <cstdint>
 
@@ -44,10 +45,17 @@ struct FfRational {
     int den;
 };
 
+/// av_log_set_callback 的回调签名（对应 FFmpeg 的 void (*)(void*, int,
+/// const char*, va_list)）。这里必须用真正的 va_list —— 它在 x86_64 MinGW 上
+/// 是数组类型，用别的类型代替再 cast 回来是不成立的。
+/// <cstdarg> 是标准头文件，不影响"本文件不引入 FFmpeg 头文件"的原则。
+using FfLogCallback = void (*)(void *, int, const char *, va_list);
+
 #define FFMPEG_FN_LIST(X) \
     X(AVUTIL, const char *, av_version_info, (void)) \
     X(AVUTIL, unsigned, avutil_version, (void)) \
     X(AVUTIL, void, av_log_set_level, (int)) \
+    X(AVUTIL, void, av_log_set_callback, (FfLogCallback)) \
     X(AVUTIL, int, av_strerror, (int, char *, size_t)) \
     X(AVUTIL, int, av_dict_set, (AVDictionary **, const char *, const char *, int)) \
     X(AVUTIL, void, av_dict_free, (AVDictionary **)) \

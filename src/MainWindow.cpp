@@ -774,6 +774,14 @@ void MainWindow::setupTimeline() {
     // 播放引擎的帧回调：在播放线程里触发，这里切回 GUI 线程再画。
     // 注意用 cutToken_ 挡住"换了文件之后旧帧才送到"的情况。
     player_.setFrameCallback([this](lr::FramePlayer::FrameData &&data) {
+        // 背压：这一帧是 QueuedConnection 投给 GUI 线程的，界面一忙
+        // （比如同时有 4 个线程在算整轨波形）投递的事件就会排起队来。
+        // 一张 1080p 的 QImage 就是 6MB，积压几十帧能吃掉上 GB 内存 ——
+        // 结局不是卡死就是被系统杀掉，而用户只看到"程序突然没了"。
+        // 宁可掉帧：待处理超过 3 帧就把这一帧直接扔掉，播放照样流畅。
+        if (pendingFrames_.load(std::memory_order_relaxed) >= 3) return;
+        pendingFrames_.fetch_add(1, std::memory_order_relaxed);
+
         QImage image = toQImage(data.rgb, data.width, data.height);
         const double sec = data.sec;
         const int token = cutToken_;
@@ -781,6 +789,13 @@ void MainWindow::setupTimeline() {
         QMetaObject::invokeMethod(
             this,
             [this, guard, token, image, sec]() {
+                // 先减计数，再走后面的 return：任何提前返回都不能漏掉这一步，
+                // 否则计数只增不减，之后每一帧都会被当成"积压"丢掉，画面直接静止。
+                // 减到 0 就归零：stopPlayback 会把它清成 0，随后执行的旧帧
+                // 不能再把它减成负数（否则下一轮播放要白丢好几帧才恢复正常）。
+                if (pendingFrames_.fetch_sub(1, std::memory_order_relaxed) <= 1) {
+                    pendingFrames_.store(0, std::memory_order_relaxed);
+                }
                 if (!guard || token != cutToken_ || !playRunning_) return;
                 setPreviewImage(image);
                 // 下面两步是播放替用户改的界面状态，先立起标志：
@@ -845,24 +860,49 @@ void MainWindow::setupTimeline() {
     // 整轨波形的两个回调：
     // · 每算完一段就重绘一次（边算边画）—— 注意只 update()，不重算任何东西；
     // · 某一段算失败：记一行，并退回"只算可见区间"的兜底方案
+    // ⚠ 下面两个回调是在 WaveformBuilder 的 **worker 线程**里执行的（std::thread，
+    // 不是 QtConcurrent）。Qt 的 QWidget 只能在 GUI 线程使用，所以这里的 lambda
+    // 本体**一行都不能碰 UI**：timeline_->update() 也好、appendLog 也好，
+    // 从后台线程调都是未定义行为 —— 多数时候看着没事，偶发就是直接崩。
+    // 一律把活儿丢回 GUI 线程（QueuedConnection）再干。
     waveBuilder_.setProgressCallback([this](int index, double t0, double t1, int done,
                                             int total) {
-        // 边算边画：每算完一段就重绘一次（只 update()，不重算任何东西）
-        if (timeline_) timeline_->update();
-        if (qEnvironmentVariableIsSet("LRCONVERT_SMOKE_TEST")) {
-            // 冒烟才打：段完成的**顺序**能看出"可见区优先"是否生效
-            qInfo().noquote() << "[SMOKE] 波形段" << index
-                              << formatTimecode(t0) << "~" << formatTimecode(t1)
-                              << done << "/" << total;
-        }
-        if (done >= total && total > 0) {
-            appendLog(QStringLiteral("波形计算完成（%1 段）").arg(total), lr::logcolor::kMuted);
-        }
+        auto guard = QPointer<MainWindow>(this);
+        // 冒烟才打：段完成的**顺序**能看出"可见区优先"是否生效
+        const QString smokeLine =
+            qEnvironmentVariableIsSet("LRCONVERT_SMOKE_TEST")
+                ? QStringLiteral("[SMOKE] 波形段 %1 %2~%3 %4/%5")
+                      .arg(index)
+                      .arg(formatTimecode(t0), formatTimecode(t1))
+                      .arg(done)
+                      .arg(total)
+                : QString();
+        QMetaObject::invokeMethod(
+            this,
+            [this, guard, smokeLine, done, total]() {
+                if (!guard) return;
+                // 边算边画：每算完一段就重绘一次（只 update()，不重算任何东西）
+                if (timeline_) timeline_->update();
+                if (!smokeLine.isEmpty()) qInfo().noquote() << smokeLine;
+                if (done >= total && total > 0) {
+                    appendLog(QStringLiteral("波形计算完成（%1 段）").arg(total),
+                              lr::logcolor::kMuted);
+                }
+            },
+            Qt::QueuedConnection);
     });
     waveBuilder_.setErrorCallback([this](const std::string &error) {
-        appendLog(QStringLiteral("波形分段失败：") + QString::fromStdString(error),
-                  lr::logcolor::kMuted);
-        rebuildCutWaveform(cutToken_);
+        auto guard = QPointer<MainWindow>(this);
+        const int token = cutToken_;
+        const QString msg = QString::fromStdString(error);
+        QMetaObject::invokeMethod(
+            this,
+            [this, guard, token, msg]() {
+                if (!guard) return;
+                appendLog(QStringLiteral("波形分段失败：") + msg, lr::logcolor::kMuted);
+                rebuildCutWaveform(token);  // 兜底：整段算不出来就退回只算可见区间
+            },
+            Qt::QueuedConnection);
     });
 }
 
@@ -878,11 +918,21 @@ QString MainWindow::formatTimecode(double sec) const {
 }
 
 QImage MainWindow::toQImage(const std::vector<uint8_t> &rgb, int width, int height) {
-    if (rgb.empty() || width <= 0 || height <= 0) return {};
+    if (width <= 0 || height <= 0) return {};
+    // 必须校验数据量够不够：下面按 width×height×3 逐行 memcpy，
+    // 一旦解码器给出的尺寸和实际像素数据对不上（损坏文件、异常分辨率、
+    // 半途失败只填了一半的帧），就会越过缓冲区边界往下读。
+    // 只查 empty() 是挡不住的 —— 数据可能"有，但不够"。
+    const std::size_t rowBytes = static_cast<std::size_t>(width) * 3u;
+    const std::size_t need = rowBytes * static_cast<std::size_t>(height);
+    if (rgb.size() < need) return {};
+    // QImage 单行最多 2GB 且尺寸有上限，异常大分辨率这里会失败，直接放弃
+    if (width > 16384 || height > 16384) return {};
+
     QImage image(width, height, QImage::Format_RGB888);
-    const int rowBytes = width * 3;
+    if (image.isNull()) return {};  // 分配失败（分辨率过大/内存不足）
     for (int y = 0; y < height; ++y) {
-        std::memcpy(image.scanLine(y), rgb.data() + static_cast<size_t>(y) * rowBytes,
+        std::memcpy(image.scanLine(y), rgb.data() + static_cast<std::size_t>(y) * rowBytes,
                     rowBytes);
     }
     return image;
@@ -1304,6 +1354,9 @@ void MainWindow::stopPlayback() {
     if (!playRunning_) return;
     playRunning_ = false;
     player_.stop();
+    // 队列里可能还压着几帧没执行：它们随后会被 playRunning_=false 挡掉，
+    // 但背压计数要在这里归零，否则下一轮播放一上来就被当成"积压"而丢帧
+    pendingFrames_.store(0, std::memory_order_relaxed);
     updatePlayButton();
     // "用户在影片条上点了别处"导致的这次停止是暂时的，马上就要从新位置重播，
     // 这里再补波形/缩略图/单帧只是白占 CPU，还会让重播卡一下 —— 跳过。
@@ -1384,9 +1437,15 @@ void MainWindow::applySnappedRange() {
                   lr::logcolor::kMuted);
     }
     if (end <= start) {
-        appendLog(QStringLiteral("吸附后起点不早于终点（%1 ~ %2），请重新选择区间。")
+        appendLog(QStringLiteral("吸附后起点不早于终点（%1 ~ %2），保持原选择不变。")
                       .arg(formatTimecode(start), formatTimecode(end)),
                   lr::logcolor::kWarn);
+        // 关键：吸附把区间吸反了（关键帧稀疏、或文件损坏导致关键帧表异常时
+        // 真的会发生）。这时**不能**把倒挂的值写回去 ——
+        // 否则"目前时长"变负数、时间输入框显示终点早于起点，
+        // 点开始剪辑还会拿一个负区间去编码。宁可不吸附，也要保住合法区间。
+        syncCutTimeEdits();
+        return;
     }
     timeline_->setStartSec(start);
     timeline_->setEndSec(end);
