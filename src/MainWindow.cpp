@@ -14,6 +14,8 @@
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QIcon>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QKeyEvent>
 #include <QLineEdit>
 #include <QListWidget>
@@ -84,9 +86,18 @@ constexpr int kWaveSegments = 16;
 constexpr int kWaveWorkers = 4;
 
 constexpr const char *kAppName = "LRconvert";
+// 版本检查与「版本信息」按钮都指向 GitHub —— 那是发布 Release 的地方，
+// version.md 也只在那里更新（gitee 那份已经不再同步，留着会读到旧版本号）。
+// raw.githubusercontent.com 给的是原始文件，格式与 gitee 一样（version: 4.0.2）。
 constexpr const char *kVersionUrl =
-    "https://gitee.com/wbs21/lrconvert/raw/main/version.md";
-constexpr const char *kHomeUrl = "https://gitee.com/wbs21/lrconvert/";
+    "https://raw.githubusercontent.com/wbs21/LRConvert/main/version.md";
+// 备用通道：raw.githubusercontent.com 在部分网络环境下连不上（SSL 握手就被
+// 掐断，实测本机如此），而 api.github.com 通常是通的。两者指向**同一个仓库的
+// 同一个文件**，所以退到这条路不会读到不同步的旧值（gitee 那份就不同步了，
+// 这也是整个换成 GitHub 的原因）。API 返回的是 JSON，content 字段是 base64。
+constexpr const char *kVersionUrlApi =
+    "https://api.github.com/repos/wbs21/LRConvert/contents/version.md";
+constexpr const char *kHomeUrl = "https://github.com/wbs21/LRConvert";
 
 // 「提示」标签页正文（Tab7 的 T7about）。按用户 2026-10-15 给的文案简化：
 // 只留"它是什么"和"哪些功能会重编码"这两件事，技术细节一律不写。
@@ -144,8 +155,7 @@ MainWindow::~MainWindow() {
 MainWindow::MainWindow(QWidget *parent) : QWidget(parent) {
     setupUi(this);
     qApp->installEventFilter(this);
-    setWindowTitle(QString::fromUtf8(kAppName) + QStringLiteral(" v") +
-                   QString::fromUtf8(lr::kAppVersion));
+    updateWindowTitle();
     setWindowIcon(QIcon(QStringLiteral(":/LRconvert.ico")));
 
     // 底部补一个进度条（不需要改动 mainui.ui）
@@ -358,6 +368,14 @@ QString MainWindow::smokeTipText() const {
 
 QString MainWindow::smokeVersionLine() const { return T7this->text(); }
 
+QString MainWindow::smokeStaticSample() const {
+    // 三个纯 .ui 静态控件：页标题 + Tab1 的两个按钮。它们的文本只有 uic 的
+    // retranslateUi() 会改（About 正文那种是运行期 setText 的，属于另一条
+    // 路径），所以拿它们当"静态文本有没有跟上语言"的探针。
+    return QStringLiteral("[%1] %2 / %3")
+        .arg(tabWidget->tabText(0), T1add->text(), T1start->text());
+}
+
 void MainWindow::smokePanSlider(double from, double to, double moveFrac) {
     if (!timeline_ || !cutLoaded_) return;
     timeline_->setViewRange(from, to);
@@ -449,6 +467,11 @@ void MainWindow::initWidgets() {
 
 // ---------------- 语言 ----------------
 
+void MainWindow::updateWindowTitle() {
+    setWindowTitle(QString::fromUtf8(kAppName) + QStringLiteral(" v") +
+                   QString::fromUtf8(lr::kAppVersion));
+}
+
 QString MainWindow::scaleDisplayName(const QString &key) {
     if (key == QStringLiteral("original")) return tr("原始大小");
     if (key == QStringLiteral("half")) return tr("一半");
@@ -514,9 +537,20 @@ void MainWindow::updateVersionLabel() {
 }
 
 void MainWindow::retranslate() {
-    // 运行期动态设置过的文本，按新语言全部重设一遍。
-    // （.ui 里的静态文本由 uic 的 retranslateUi 负责，但那个只在窗口
-    // 构造时跑一次；语言切换不重建窗口，所以动态文本全靠这里。）
+    // ---- 1) .ui 里的静态文本 ------------------------------------------
+    // 这一步原来漏了：uic 生成的 retranslateUi() 只在 setupUi() 里跑过一次
+    // （窗口构造时），之后切语言没人再调它 —— 于是除了 About 页那几处
+    // 运行期 setText 的文案，其余界面（各 Tab 的标签、按钮、页标题）永远
+    // 停在启动时的语言。这就是"切了中文只有 About 页跟着变"的原因。
+    //
+    // 可以放心调：本项目的 QComboBox 在 .ui 里**一个静态 item 都没有**
+    // （码率档 / preset / 编码器 / 语言框全是运行期填的），所以 retranslateUi
+    // 不会把它们清空填回 Designer 里的旧值。
+    retranslateUi(this);
+    // retranslateUi 会把窗口标题改回 .ui 里的静态值，版本号得补回来
+    updateWindowTitle();
+
+    // ---- 2) 运行期动态设置过的文本，按新语言全部重设一遍 ---------------
     updateAboutText();
     T7this->setText(tr("当前版本 %1").arg(QString::fromUtf8(lr::kAppVersion)));
     updateVersionLabel();
@@ -2051,20 +2085,63 @@ void MainWindow::customCode() {
 // ---------------- 版本检查 ----------------
 
 void MainWindow::checkVersion() {
+    fetchVersionFile(QUrl(QString::fromUtf8(kVersionUrl)), true);
+}
+
+/// API 那条路给的是 JSON：`{"content":"dmVyc2lvbjogNC4wLjIK", ...}`，
+/// content 是 base64（还夹着换行）。抽出来解成纯文本，好让后面共用一套正则。
+QString MainWindow::versionFileText(const QByteArray &raw) {
+    const QByteArray trimmed = raw.trimmed();
+    if (!trimmed.startsWith('{')) return QString::fromUtf8(raw);
+
+    const QJsonDocument doc = QJsonDocument::fromJson(trimmed);
+    if (!doc.isObject()) return {};
+    // GitHub 未认证 API 限流后返回的也是 JSON（带 message 字段），
+    // 没有 content，解出来是空串——由调用方当"没拿到"处理。
+    const QString content = doc.object().value(QLatin1String("content")).toString();
+    if (content.isEmpty()) return {};
+    return QString::fromUtf8(QByteArray::fromBase64(content.toUtf8()));
+}
+
+void MainWindow::fetchVersionFile(const QUrl &url, bool allowFallback) {
     if (!net_) net_ = new QNetworkAccessManager(this);
-    QNetworkRequest request(QUrl(QString::fromUtf8(kVersionUrl)));
+    QNetworkRequest request(url);
+    // GitHub 的 API 要求带 User-Agent，缺了直接 403
+    request.setRawHeader("User-Agent",
+                         QByteArray("LRConvert/") + lr::kAppVersion);
     QNetworkReply *reply = net_->get(request);
-    connect(reply, &QNetworkReply::finished, this, [this, reply]() {
+    connect(reply, &QNetworkReply::finished, this, [this, reply, allowFallback]() {
         reply->deleteLater();
         // 只存原始结果（版本号或空），文本的本地化在 updateVersionLabel() 里
         // 做——这样切换语言后不用重新请求一遍网络
         latestVersion_.clear();
+        QString body;
         if (reply->error() == QNetworkReply::NoError) {
-            const QString body = QString::fromUtf8(reply->readAll());
-            const QRegularExpression re(
-                QStringLiteral("version:\\s*([0-9]+(?:\\.[0-9]+)*)"));
-            const auto match = re.match(body);
-            if (match.hasMatch()) latestVersion_ = match.captured(1);
+            body = versionFileText(reply->readAll());
+        }
+        if (body.isEmpty() && allowFallback) {
+            // 主路（raw）没拿到 —— 换 API 那条路再试一次；再失败就认了
+            qInfo().noquote()
+                << QStringLiteral("[版本检查] %1 没拿到，改走 GitHub API")
+                       .arg(reply->url().host());
+            fetchVersionFile(QUrl(QString::fromUtf8(kVersionUrlApi)), false);
+            return;
+        }
+        const QRegularExpression re(
+            QStringLiteral("version:\\s*([0-9]+(?:\\.[0-9]+)*)"));
+        const auto match = re.match(body);
+        if (match.hasMatch()) {
+            latestVersion_ = match.captured(1);
+            qInfo().noquote()
+                << QStringLiteral("[版本检查] 最新 %1（来自 %2）")
+                       .arg(latestVersion_, reply->url().host());
+        } else if (!body.isEmpty()) {
+            qWarning().noquote()
+                << QStringLiteral("[版本检查] 拿到了文件但没解析出版本号");
+        } else {
+            qWarning().noquote()
+                << QStringLiteral("[版本检查] 两条通道都没拿到（%1）")
+                       .arg(reply->errorString());
         }
         updateVersionLabel();
     });

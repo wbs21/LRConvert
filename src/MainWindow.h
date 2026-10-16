@@ -81,6 +81,10 @@ public:
     QString smokeTipText() const;
     /// 冒烟用：Tab7 的「当前版本」一行（retranslate 会重设它，用于核对语言切换）
     QString smokeVersionLine() const;
+    /// 冒烟用：.ui 静态文本的抽样（第一个页标题 + Tab1 的两个按钮）。
+    /// 这些文本只有 uic 的 retranslateUi() 会改，所以"它们跟着语言变"
+    /// 就等于那条路径通了 —— 专门盯住"切了语言只有 About 页跟着变"这类回归。
+    QString smokeStaticSample() const;
     /// 冒烟用：最大化 / 还原（BUG-001 复现用，无需人工点标题栏）
     void smokeSetMaximized(bool on);
     /// 冒烟用：人为把窗口顶出屏幕，验证 keepWindowOnScreen() 能把它拉回来
@@ -146,15 +150,22 @@ private slots:
     // 通用
     void stopTasks();
     void checkVersion();
+    /// 抓版本文件；主路（raw）拿不到时回退 GitHub API 再试一次
+    void fetchVersionFile(const QUrl &url, bool allowFallback);
+    /// 版本文件内容 -> 纯文本（API 那条路是 JSON + base64，先解出来）
+    static QString versionFileText(const QByteArray &raw);
 
     // ---- 语言 ----
-    /// 切换语言并刷新所有运行期设置的文本（.ui 静态文本在下次构造时才变，
-    /// 语言切换不重建窗口，所以动态文本全靠这里重设）。
+    /// 切换语言并刷新界面：先 uic 的 retranslateUi() 重设 .ui 静态文本，
+    /// 再 retranslate() 重设运行期动态设置的那些。
     /// 返回 false 时 error 给出原因（界面保持原语言不变）。
     bool switchLanguage(const QString &id, QString *error = nullptr);
     /// 只刷新动态文本（不动 translator）：switchLanguage 内部用，
     /// 也是将来"系统语言变化"之类场景的入口
     void retranslate();
+    /// 窗口标题（程序名 + 版本号）。retranslateUi() 会把标题改回 .ui 里的
+    /// 静态值，所以切语言后要由 retranslate() 重新调一次补上版本号。
+    void updateWindowTitle();
     /// 分辨率规范键 -> 本地化显示名（"1920*1080" 等数字项原样返回）
     static QString scaleDisplayName(const QString &key);
     /// 硬件编码器名 -> 本机要求说明（探测失败时展示）；无关编码器返回空串

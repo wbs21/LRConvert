@@ -439,14 +439,16 @@ int main(int argc, char *argv[]) {
             qInfo().noquote() << QStringLiteral("[SMOKE] 切中文：")
                               << (ok ? QStringLiteral("成功") : QStringLiteral("失败"))
                               << QStringLiteral(" 提示页=") << window.smokeTipText()
-                              << QStringLiteral(" 版本行=") << window.smokeVersionLine();
+                              << QStringLiteral(" 版本行=") << window.smokeVersionLine()
+                              << QStringLiteral(" 静态文本=") << window.smokeStaticSample();
         });
         QTimer::singleShot(4500, &window, [&window]() {
             const bool ok = window.smokeSwitchLanguage(QStringLiteral("en"));
             qInfo().noquote() << QStringLiteral("[SMOKE] 切回英文：")
                               << (ok ? QStringLiteral("成功") : QStringLiteral("失败"))
                               << QStringLiteral(" 提示页=") << window.smokeTipText()
-                              << QStringLiteral(" 版本行=") << window.smokeVersionLine();
+                              << QStringLiteral(" 版本行=") << window.smokeVersionLine()
+                              << QStringLiteral(" 静态文本=") << window.smokeStaticSample();
         });
         if (!qEnvironmentVariableIsSet("LRCONVERT_SMOKE_TEST")) {
             QTimer::singleShot(6000, &app, &QCoreApplication::quit);
