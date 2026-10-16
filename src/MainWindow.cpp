@@ -37,17 +37,37 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <cstring>
+#include <mutex>
 
 #include "core/PathUtil.h"
 #include "core/TimeUtil.h"
 #include "core/Version.h"
+#include "core/I18n.h"
 #include "ffmpeg/FfmpegApi.h"
+#include "platform/CrashDump.h"
 #include "tasks/TranscodeTask.h"
 #include "ffmpeg/FfmpegCapability.h"
 #include "tasks/RemuxTask.h"
 
 namespace {
+
+// ---- 取帧器（共享资源）的使用约定（P2-10 锁粒度）----
+//
+// cutGrabber_ 是被多个后台任务共用的（导入 / 拖动时的预览帧 / 缩略图），
+// 每次 grabAt 都要 seek + 顺序解码若干帧，耗时不可控（损坏文件上尤其长）。
+// 原来每个任务都"持锁做完整件事"，于是：
+//   · 三个任务互相串行 —— 拖标尺时前面还压着一个导入，界面就僵住；
+//   · 退化为"导入期间的界面假死"。
+// 改成两条：
+//   1) 能自带取帧器的一次性批量任务（导入）在**本地**实例上干完，
+//      只在最后一刻进锁做一次 move（锁内没有任何 I/O）；
+//   2) 节流性质的任务（预览帧 / 缩略图）用带超时的 try_lock，
+//      抢不到就放弃这一拍 —— 下一拍还会再来，没必要排队死等。
+bool tryLockGrabber(std::timed_mutex &m, int timeoutMs) {
+    return m.try_lock_for(std::chrono::milliseconds(timeoutMs));
+}
 
 /// 缩略图取样位置（占可见区间的比例）：左 / 1/4 / 中 / 3/4 / 右。
 /// 末点取 0.999 而不是 1.0，避免 seek 到正好等于片长的位置取不到帧
@@ -70,12 +90,8 @@ constexpr const char *kHomeUrl = "https://gitee.com/wbs21/lrconvert/";
 
 // 「提示」标签页正文（Tab7 的 T7about）。按用户 2026-10-15 给的文案简化：
 // 只留"它是什么"和"哪些功能会重编码"这两件事，技术细节一律不写。
-const char *kAboutText =
-    "LRconvert是一个FFmpeg命令行UI，所有功能都是基于FFmpeg完成。\n"
-    "\n"
-    "· 前四项功能（截取 / 连接 / 分离 / 合并）为流拷贝，不重新编码，\n"
-    "  因此速度极快，且不会带来任何画质损失。\n"
-    "· 批量压缩与自定义压缩会重新编码，画质与体积由码率决定。\n";
+// 走 tr() 而不是 const char* 常量：lupdate 只提取调用点上的字面量，
+// 放在匿名命名空间里的字符串它看不见（也就翻不了）。
 
 /// 版本号比较用：'3.10' -> {3, 10}
 QList<int> parseVersion(const QString &text) {
@@ -136,7 +152,7 @@ MainWindow::MainWindow(QWidget *parent) : QWidget(parent) {
     progressBar_ = new QProgressBar(this);
     progressBar_->setRange(0, 100);
     progressBar_->setValue(0);
-    progressBar_->setFormat(QStringLiteral("空闲"));
+    progressBar_->setFormat(tr("空闲"));
     progressBar_->setVisible(false);
     progressBar_->setFixedHeight(20);
     verticalLayout->addWidget(progressBar_);
@@ -144,6 +160,21 @@ MainWindow::MainWindow(QWidget *parent) : QWidget(parent) {
     setupTimeline();
     initWidgets();
     connectActions();
+
+    // GUI 心跳（P0-1 看门狗的一半）：一个 1 秒的定时器，只要事件循环还在转
+    // 就会持续触发。"点了没反应"这种卡死，靠的就是"定时器不再触发"暴露：
+    // 15 秒没有心跳，看门狗就写一份 dump —— 卡死和崩溃共用同一条排查链路。
+    //
+    // 定时器用 this 作 parent，析构时自动停；QTimer 的 timeout 只在事件
+    // 循环活着时才发得出来，正是我们要的信号。（模态对话框期间事件循环
+    // 仍然在转，定时器照常触发 —— 那种"等待用户作答"不算卡死。）
+    heartbeatTimer_ = new QTimer(this);
+    heartbeatTimer_->setInterval(1000);
+    connect(heartbeatTimer_, &QTimer::timeout, this, []() {
+        lr::platform::heartbeat(lr::platform::Heartbeat::Gui);
+    });
+    heartbeatTimer_->start();
+    lr::platform::setExpected(lr::platform::Heartbeat::Gui, true);
 
     connect(this, &MainWindow::ffmpegLoaded, this, &MainWindow::onFfmpegLoaded);
     connect(this, &MainWindow::hwEncodersProbed, this,
@@ -155,7 +186,7 @@ MainWindow::MainWindow(QWidget *parent) : QWidget(parent) {
 
     infobox->document()->setMaximumBlockCount(800);
 
-    appendLog(QStringLiteral("界面已就绪。此刻尚未加载任何 FFmpeg 动态库 —— "
+    appendLog(tr("界面已就绪。此刻尚未加载任何 FFmpeg 动态库 —— "
                              "这是刻意的。"),
               lr::logcolor::kStep);
     qInfo().noquote() << "[M1] 界面就绪，标签页数：" << tabWidget->count();
@@ -182,8 +213,8 @@ void MainWindow::smokeLoadCutFile(const QString &path) {
 
 QString MainWindow::smokeCutState() const {
     if (!timeline_) return QStringLiteral("no-timeline");
-    if (!cutLoaded_) return QStringLiteral("未载入");
-    return QStringLiteral("已载入 时长=%1 缩略图=%2/5 波形点=%3 波形段=%4 关键帧=%5 起点=%6 终点=%7"
+    if (!cutLoaded_) return tr("未载入");
+    return tr("已载入 时长=%1 缩略图=%2/5 波形点=%3 波形段=%4 关键帧=%5 起点=%6 终点=%7"
                           " 视窗=%8~%9 按钮=%10 目前时长=%11")
         .arg(formatTimecode(cutInfo_.durationSec))
         .arg(timeline_->thumbnailCount())
@@ -191,7 +222,7 @@ QString MainWindow::smokeCutState() const {
         .arg(QStringLiteral("%1/%2%3")
                  .arg(waveBuilder_.doneSegments())
                  .arg(waveBuilder_.totalSegments())
-                 .arg(waveBuilder_.running() ? QStringLiteral("(算中)") : QStringLiteral("")))
+                 .arg(waveBuilder_.running() ? tr("(算中)") : QString()))
         .arg(cutKeyframes_.size())
         .arg(formatTimecode(timeline_->startSec()))
         .arg(formatTimecode(timeline_->endSec()))
@@ -236,14 +267,14 @@ void MainWindow::smokePressSpace() {
 
 QString MainWindow::smokePlayState() const {
     const QPixmap pixmap = T1preview->pixmap();
-    return QStringLiteral("播放中=%1 按钮=%2 标尺=%3 播放位置=%4 有音轨=%5 声卡已开=%6"
+    return tr("播放中=%1 按钮=%2 标尺=%3 播放位置=%4 有音轨=%5 声卡已开=%6"
                           " 视窗=%7~%8 画面=%9x%10")
-        .arg(playRunning_ ? QStringLiteral("是") : QStringLiteral("否"))
+        .arg(playRunning_ ? tr("是") : tr("否"))
         .arg(T1play->text())
         .arg(formatTimecode(timeline_ ? timeline_->cursorSec() : 0.0))
         .arg(formatTimecode(player_.position()))
-        .arg(player_.hasAudioTrack() ? QStringLiteral("有") : QStringLiteral("无"))
-        .arg(player_.audioActive() ? QStringLiteral("是") : QStringLiteral("否"))
+        .arg(player_.hasAudioTrack() ? tr("有") : tr("无"))
+        .arg(player_.audioActive() ? tr("是") : tr("否"))
         .arg(formatTimecode(timeline_ ? timeline_->viewFrom() : 0.0))
         .arg(formatTimecode(timeline_ ? timeline_->viewTo() : 0.0))
         .arg(pixmap.isNull() ? 0 : pixmap.width())
@@ -254,21 +285,23 @@ QString MainWindow::smokeDamageState() const {
     const auto &s = lastPlayStats_;
     int grabBad = 0;
     {
-        std::lock_guard<std::mutex> lock(cutGrabberMutex_);
+        // 冒烟查询走 GUI 线程：这里必须拿到数据（输出要准确），
+        // 但取帧任务是有时限的（P2-10），所以等待时长是有界的，不会演变成卡死。
+        std::lock_guard<std::timed_mutex> lock(cutGrabberMutex_);
         grabBad = cutGrabber_.badBlocks();
     }
-    return QStringLiteral("取帧坏包=%1 播放坏包[视频=%2 顶替帧=%3 音频=%4 隐藏=%5 静音=%6]")
+    return tr("取帧坏包=%1 播放坏包[视频=%2 顶替帧=%3 音频=%4 隐藏=%5 静音=%6]")
         .arg(grabBad)
         .arg(s.videoBadBlocks)
         .arg(s.videoRecovered)
         .arg(s.audioBadBlocks)
         .arg(s.audioConcealed)
-        .arg(s.audioDropped ? QStringLiteral("是") : QStringLiteral("否"));
+        .arg(s.audioDropped ? tr("是") : tr("否"));
 }
 
 QString MainWindow::smokePreviewInfo() const {
     const QPixmap pixmap = T1preview->pixmap();
-    return QStringLiteral("窗口=%1x%2 预览窗=%3x%4 画面=%5x%6 日志区高=%7")
+    return tr("窗口=%1x%2 预览窗=%3x%4 画面=%5x%6 日志区高=%7")
         .arg(width())
         .arg(height())
         .arg(T1preview->width())
@@ -306,9 +339,9 @@ QString MainWindow::smokeWindowGeom() const {
     return QStringLiteral(
                "状态=%1 客户区=%2,%3 %4x%5 外框=%6,%7 %8x%9 常规=%10,%11 %12x%13 "
                "最小高=%14 屏幕=%15,%16 %17x%18 可用=%19,%20 %21x%22")
-        .arg(isMaximized() ? QStringLiteral("最大化")
-                           : (isMinimized() ? QStringLiteral("最小化")
-                                            : QStringLiteral("正常")))
+        .arg(isMaximized() ? tr("最大化")
+                           : (isMinimized() ? tr("最小化")
+                                            : tr("正常")))
         .arg(g.x()).arg(g.y()).arg(g.width()).arg(g.height())
         .arg(fr.x()).arg(fr.y()).arg(fr.width()).arg(fr.height())
         .arg(ng.x()).arg(ng.y()).arg(ng.width()).arg(ng.height())
@@ -322,6 +355,8 @@ QString MainWindow::smokeTipText() const {
         T7about->toPlainText().split(QLatin1Char('\n'), Qt::SkipEmptyParts);
     return lines.mid(0, 2).join(QLatin1String(" / "));
 }
+
+QString MainWindow::smokeVersionLine() const { return T7this->text(); }
 
 void MainWindow::smokePanSlider(double from, double to, double moveFrac) {
     if (!timeline_ || !cutLoaded_) return;
@@ -340,12 +375,19 @@ void MainWindow::initWidgets() {
     T2listbox->setDropIndicatorShown(true);
     T2listbox->setSelectionMode(QAbstractItemView::ExtendedSelection);
 
-    auto fill = [](QComboBox *box, const lr::pathutil::NameValues &values) {
+    // 分辨率下拉框：**显示名**随语言变，**键**（original/half/… 的规范名，
+    // 与语言无关）存在 userData 里 —— TranscodeSpec::scale 收的就是键，
+    // 切语言时按键保留当前选择（见 retranslate()）。
+    // 编码器下拉框相反：显示名就是 ffmpeg 的编码器名（libx264/nvenc/…），
+    // 本身就是规范键，不需要翻译。
+    auto fillEncoder = [](QComboBox *box, const lr::pathutil::NameValues &values) {
+        const QString keep = box->currentText();
         box->clear();
         for (const auto &kv : values) {
             box->addItem(QString::fromStdString(kv.first));
         }
-        box->setCurrentIndex(0);
+        const int idx = box->findText(keep);
+        box->setCurrentIndex(idx >= 0 ? idx : 0);
     };
 
     T5bit->clear();
@@ -353,12 +395,12 @@ void MainWindow::initWidgets() {
         T5bit->addItem(QString::fromUtf8(v));
     }
     T5bit->setCurrentIndex(2);
-    fill(T5size, lr::pathutil::scaleFilters());
+    fillScaleBox(T5size, lr::pathutil::scaleFilters());
     // 编码器下拉框启动时只放软件编码器；硬件项要等后台探测确认本机可用后
     // 再由 applyHwEncoders() 追加——不支持的项从头到尾不会出现。
-    fill(T5hwacc, lr::pathutil::softwareEncoders());
+    fillEncoder(T5hwacc, lr::pathutil::softwareEncoders());
 
-    fill(T6quality, lr::pathutil::softwareEncoders());
+    fillEncoder(T6quality, lr::pathutil::softwareEncoders());
     T6speed->clear();
     for (const char *v : {"fast", "medium", "slow"}) {
         T6speed->addItem(QString::fromUtf8(v));
@@ -369,7 +411,7 @@ void MainWindow::initWidgets() {
         T6grade->addItem(QString::fromUtf8(v));
     }
     T6grade->setCurrentIndex(2);
-    fill(T6type, lr::pathutil::scaleFilters());
+    fillScaleBox(T6type, lr::pathutil::scaleFilters());
     T6level->clear();
     for (const char *v : {"1", "2", "4", "8", "12", "16", "20", "30"}) {
         T6level->addItem(QString::fromUtf8(v));
@@ -381,10 +423,125 @@ void MainWindow::initWidgets() {
     }
     T6audio->setCurrentIndex(1);
 
-    T7this->setText(QStringLiteral("当前版本 %1").arg(QString::fromUtf8(lr::kAppVersion)));
-    T7about->setPlainText(QString::fromUtf8(kAboutText));
+    // 语言下拉框（Tab7 右上角）：项是各语言的原生名字（不随界面翻译），
+    // userData 存语言 id。先设好当前索引再连信号，免得初始化时平白
+    // 触发一次"切换"。
+    T7lang->clear();
+    for (const lr::i18n::LanguageInfo &lang : lr::i18n::languages()) {
+        T7lang->addItem(lang.nativeName, lang.id);
+    }
+    const int langIdx = T7lang->findData(lr::i18n::current());
+    T7lang->setCurrentIndex(langIdx >= 0 ? langIdx : 0);
+    connect(T7lang, &QComboBox::currentIndexChanged, this, [this]() {
+        const QString id = T7lang->currentData().toString();
+        if (id.isEmpty()) return;
+        QString error;
+        if (!switchLanguage(id, &error)) {
+            QMessageBox::warning(this, tr("切换语言失败"), error);
+        }
+    });
+
+    T7this->setText(tr("当前版本 %1").arg(QString::fromUtf8(lr::kAppVersion)));
+    updateAboutText();
 
     setBusy(false);
+}
+
+// ---------------- 语言 ----------------
+
+QString MainWindow::scaleDisplayName(const QString &key) {
+    if (key == QStringLiteral("original")) return tr("原始大小");
+    if (key == QStringLiteral("half")) return tr("一半");
+    if (key == QStringLiteral("quarter")) return tr("四分之一");
+    return key;  // "1920*1080" / "1280*720" 本身就是数字，不用翻
+}
+
+QString MainWindow::hwRequirementText(const QString &encoderName) {
+    if (encoderName == QStringLiteral("h264_nvenc"))
+        return tr("需要 NVIDIA 显卡与驱动");
+    if (encoderName == QStringLiteral("h264_qsv"))
+        return tr("需要支持 QSV 的 Intel 核显");
+    if (encoderName == QStringLiteral("h264_amf"))
+        return tr("需要 AMD 显卡（AMF）");
+    if (encoderName == QStringLiteral("h264_videotoolbox"))
+        return tr("仅 macOS 可用");
+    return {};
+}
+
+void MainWindow::fillScaleBox(QComboBox *box,
+                              const lr::pathutil::NameValues &values) {
+    // 按键保留当前选择：切语言时用户选过的项不会被打回第一项
+    const QString keep = box->currentData().toString();
+    box->clear();
+    for (const auto &kv : values) {
+        box->addItem(scaleDisplayName(QString::fromStdString(kv.first)),
+                     QString::fromStdString(kv.first));
+    }
+    const int idx = box->findData(keep);
+    box->setCurrentIndex(idx >= 0 ? idx : 0);
+}
+
+void MainWindow::updateAboutText() {
+    T7about->setPlainText(
+        tr("LRconvert是一个FFmpeg命令行UI，所有功能都是基于FFmpeg完成。\n"
+           "\n"
+           "· 前四项功能（截取 / 连接 / 分离 / 合并）为流拷贝，不重新编码，\n"
+           "  因此速度极快，且不会带来任何画质损失。\n"
+           "· 批量压缩与自定义压缩会重新编码，画质与体积由码率决定。\n"));
+}
+
+void MainWindow::updateBatchInfoText() {
+    if (T5file->text().trimmed().isEmpty()) {
+        T5info->clear();
+        return;
+    }
+    T5info->setText(tr("此文件夹中共有 %1 个视频文件，"
+                       "批量转码耗时较长，请利用空闲时间进行转码！")
+                        .arg(batchInputs_.size()));
+}
+
+void MainWindow::updateVersionLabel() {
+    if (latestVersion_.isEmpty()) {
+        T7new->setText(tr("无法获取最新版本信息"));
+        return;
+    }
+    QString text = tr("最新版本：%1").arg(latestVersion_);
+    if (versionGreater(parseVersion(latestVersion_),
+                       parseVersion(QString::fromUtf8(lr::kAppVersion)))) {
+        text += tr("（有更新）");
+    }
+    T7new->setText(text);
+}
+
+void MainWindow::retranslate() {
+    // 运行期动态设置过的文本，按新语言全部重设一遍。
+    // （.ui 里的静态文本由 uic 的 retranslateUi 负责，但那个只在窗口
+    // 构造时跑一次；语言切换不重建窗口，所以动态文本全靠这里。）
+    updateAboutText();
+    T7this->setText(tr("当前版本 %1").arg(QString::fromUtf8(lr::kAppVersion)));
+    updateVersionLabel();
+    updateCutInfoBar();    // "尚未选择文件" / 已导入文件的信息行
+    updateBatchInfoText(); // Tab5 的文件数量提示
+    if (!busy_) progressBar_->setFormat(tr("空闲"));
+    updatePlayButton();    // 「▶ 播放」⇄「■ 停止」
+    setBusy(busy_);        // 「开始剪辑」⇄「停止编码」+ 各按钮可用性
+    // 分辨率下拉框的显示名跟着语言变（选择项按 userData 里的键保留）
+    fillScaleBox(T5size, lr::pathutil::scaleFilters());
+    fillScaleBox(T6type, lr::pathutil::scaleFilters());
+}
+
+bool MainWindow::switchLanguage(const QString &id, QString *error) {
+    if (id == lr::i18n::current()) return true;  // 没变：什么都不做
+    if (!lr::i18n::apply(id, error)) return false;
+    retranslate();
+    // 时间轴上的占位文字是绘制时现场 translate() 的，重画一次即跟上新语言
+    if (timeline_) timeline_->update();
+    return true;
+}
+
+bool MainWindow::smokeSwitchLanguage(const QString &id) {
+    QString error;
+    return switchLanguage(id, &error);
 }
 
 void MainWindow::connectActions() {
@@ -435,7 +592,7 @@ void MainWindow::startAsyncInit() {
     if (ffmpegLoadStarted_) return;
     ffmpegLoadStarted_ = true;
 
-    appendLog(QStringLiteral("开始在后台加载 FFmpeg 动态库…（加载期间功能按钮不可用）"));
+    appendLog(tr("开始在后台加载 FFmpeg 动态库…（加载期间功能按钮不可用）"));
     qInfo().noquote() << "[M1] 界面已显示，开始后台加载 FFmpeg 动态库";
 
     auto guard = QPointer<MainWindow>(this);
@@ -448,7 +605,7 @@ void MainWindow::startAsyncInit() {
         if (ok) {
             const FfmpegCapability cap = collectCapability(api);
             detail = QString::fromStdString(api.summary()) +
-                     QStringLiteral("\n视频解码 %1 · 视频编码 %2 ｜ 音频解码 %3 · 音频编码 %4"
+                     tr("\n视频解码 %1 · 视频编码 %2 ｜ 音频解码 %3 · 音频编码 %4"
                                     "\n解封装器 %5 个 · 封装器 %6 个")
                          .arg(cap.decoders.video.size())
                          .arg(cap.encoders.video.size())
@@ -465,7 +622,7 @@ void MainWindow::startAsyncInit() {
         // （find_encoder + 最小配置 open2），本机打不开的编码器不进下拉框，
         // 避免"选完 nvenc 一点开始才回退 libx264"的体验。
         // 探测在后台线程完成，期间下拉框仍是全量列表，结果到了再收敛。
-        if (ok && guard) {
+        if (ok && guard && !safeMode_) {
             std::vector<std::string> names;
             for (const auto &kv : lr::pathutil::hwEncoders()) {
                 if (kv.second != "libx264") names.push_back(kv.second);
@@ -483,15 +640,14 @@ void MainWindow::startAsyncInit() {
                     qInfo().noquote()
                         << "[M6] 硬件编码器可用：" << p.name.c_str();
                 } else {
-                    const std::string req =
-                        lr::pathutil::hwEncoderRequirement(p.name);
+                    const QString req =
+                        hwRequirementText(QString::fromStdString(p.name));
                     const QString reason =
-                        req.empty()
+                        req.isEmpty()
                             ? QString::fromStdString(p.error)
-                            : QStringLiteral("%1；%2")
-                                  .arg(QString::fromStdString(req),
-                                       QString::fromStdString(p.error));
-                    hidden << QStringLiteral("%1（%2)")
+                            : tr("%1；%2")
+                                  .arg(req, QString::fromStdString(p.error));
+                    hidden << tr("%1（%2)")
                                   .arg(QString::fromStdString(p.name), reason);
                     qInfo().noquote()
                         << "[M6] 硬件编码器不可用（将隐藏）：" << p.name.c_str()
@@ -502,8 +658,18 @@ void MainWindow::startAsyncInit() {
                 available.join(QLatin1Char(' ')),
                 hidden.isEmpty()
                     ? QString()
-                    : QStringLiteral("（识别耗时 %1 ms）").arg(probeMs) +
+                    : tr("（识别耗时 %1 ms）").arg(probeMs) +
                           QLatin1Char('\n') + hidden.join(QLatin1Char('\n')));
+        } else if (ok && guard && safeMode_) {
+            // 安全模式（P1-8）：刚崩过一次，这次别再去动硬件编码器 ——
+            // 那是要打开各家驱动的最脆弱一段。下拉框保持"只有软件编码器"，
+            // 功能一个不少（libx264 照样能用），只是不再做这次额外的赌博。
+            qWarning().noquote()
+                << "[P1-8] 安全模式：跳过硬件编码器探测（上一次运行异常结束）";
+            emit hwEncodersProbed(
+                QString(),
+                tr("安全模式：上一次运行异常结束，本次跳过硬件识别，"
+                   "编码器下拉框只列软件方案（libx264）。"));
         }
     });
 }
@@ -513,20 +679,20 @@ void MainWindow::onFfmpegLoaded(bool ok, const QString &detail) {
 
     if (!ok) {
         qWarning().noquote() << "[M1] 动态库加载失败：" << detail;
-        appendLog(QStringLiteral("✗ FFmpeg 动态库加载失败：") + detail,
+        appendLog(tr("✗ FFmpeg 动态库加载失败：") + detail,
                   lr::logcolor::kError);
-        appendLog(QStringLiteral("  请把 avutil / avcodec / avformat / swscale / "
+        appendLog(tr("  请把 avutil / avcodec / avformat / swscale / "
                                  "swresample 五个 DLL 放到程序目录，"
                                  "或用环境变量 LRCONVERT_FFMPEG_DIR 指定。"),
                   lr::logcolor::kWarn);
-        appendLog(QStringLiteral("  在动态库就绪之前，各功能按钮不可用。"),
+        appendLog(tr("  在动态库就绪之前，各功能按钮不可用。"),
                   lr::logcolor::kWarn);
         return;
     }
 
     qInfo().noquote() << "[M1] 动态库加载成功：" << detail;
     appendLog(QStringLiteral("✓ ") + detail, lr::logcolor::kOk);
-    appendLog(QStringLiteral("引擎就绪，可以开始处理任务了。"),
+    appendLog(tr("引擎就绪，可以开始处理任务了。"),
               lr::logcolor::kOk);
     setBusy(false);  // Loading → Ready：放开六个开始按钮
 
@@ -539,15 +705,15 @@ void MainWindow::onFfmpegLoaded(bool ok, const QString &detail) {
         for (const auto &s : v) out << QString::fromStdString(s);
         return out.join(QStringLiteral(" "));
     };
-    appendLog(QStringLiteral("  视频解码：") + join(cap.decoders.video));
-    appendLog(QStringLiteral("  视频编码：") + join(cap.encoders.video));
-    appendLog(QStringLiteral("  音频解码：") + join(cap.decoders.audio));
-    appendLog(QStringLiteral("  音频编码：") + join(cap.encoders.audio));
-    appendLog(QStringLiteral("  解封装器：") + join(cap.demuxers));
-    appendLog(QStringLiteral("  封装器：") + join(cap.muxers));
+    appendLog(tr("  视频解码：") + join(cap.decoders.video));
+    appendLog(tr("  视频编码：") + join(cap.encoders.video));
+    appendLog(tr("  音频解码：") + join(cap.decoders.audio));
+    appendLog(tr("  音频编码：") + join(cap.encoders.audio));
+    appendLog(tr("  解封装器：") + join(cap.demuxers));
+    appendLog(tr("  封装器：") + join(cap.muxers));
 
     if (cap.decoders.video.empty()) {
-        appendLog(QStringLiteral("  ⚠ 这份构建没有编译任何视频解码器，"
+        appendLog(tr("  ⚠ 这份构建没有编译任何视频解码器，"
                                  "压缩类功能不可用。"),
                   lr::logcolor::kWarn);
     }
@@ -578,21 +744,21 @@ void MainWindow::applyHwEncoders(const QString &availableCsv,
 
     if (hiddenReport.isEmpty()) {
         if (available.isEmpty()) {
-            appendLog(QStringLiteral("硬件编码器识别：本机没有可用的硬件编码器，"
+            appendLog(tr("硬件编码器识别：本机没有可用的硬件编码器，"
                                      "压缩将使用 libx264。"),
                       lr::logcolor::kStep);
         } else {
-            appendLog(QStringLiteral("硬件编码器识别：本机可用 %1，"
+            appendLog(tr("硬件编码器识别：本机可用 %1，"
                                      "已加入编码器下拉框。")
-                          .arg(available.join(QStringLiteral("、"))),
+                          .arg(available.join(tr("、"))),
                       lr::logcolor::kOk);
         }
     } else {
-        appendLog(QStringLiteral("硬件编码器识别完成，已隐藏本机不支持的选项："),
+        appendLog(tr("硬件编码器识别完成，已隐藏本机不支持的选项："),
                   lr::logcolor::kStep);
         if (!available.isEmpty()) {
-            appendLog(QStringLiteral("  · 可用并已加入：") +
-                          available.join(QStringLiteral("、")),
+            appendLog(tr("  · 可用并已加入：") +
+                          available.join(tr("、")),
                       lr::logcolor::kOk);
         }
         const QStringList lines =
@@ -616,7 +782,7 @@ void MainWindow::appendLog(const QString &text, const QString &color) {
 void MainWindow::setProgress(int percent, const QString &detail) {
     if (percent < 0) {
         progressBar_->setRange(0, 0);
-        progressBar_->setFormat(detail.isEmpty() ? QStringLiteral("处理中…")
+        progressBar_->setFormat(detail.isEmpty() ? tr("处理中…")
                                                  : detail);
     } else {
         progressBar_->setRange(0, 100);
@@ -630,11 +796,11 @@ void MainWindow::onBatchFinished(bool ok) {
     stopAll_.store(false);
     setBusy(false);
     progressBar_->setVisible(false);
-    progressBar_->setFormat(QStringLiteral("空闲"));
+    progressBar_->setFormat(tr("空闲"));
     if (ok) {
-        appendLog(QStringLiteral("全部任务已完成。"), lr::logcolor::kOk);
+        appendLog(tr("全部任务已完成。"), lr::logcolor::kOk);
     } else {
-        appendLog(QStringLiteral("任务结束（失败或已被停止）。"),
+        appendLog(tr("任务结束（失败或已被停止）。"),
                   lr::logcolor::kWarn);
     }
 }
@@ -661,14 +827,14 @@ void MainWindow::setBusy(bool busy) {
     const bool cutRunnable = !busy && engineReady_ && cutLoaded_;
     T1start->setEnabled(busy || cutRunnable);
     if (busy) {
-        T1start->setText(QStringLiteral("停止编码"));
+        T1start->setText(tr("停止编码"));
         T1start->setStyleSheet(QStringLiteral(
             "QPushButton{background:#D32F2F;color:#FFFFFF;border:1px solid "
             "#B71C1C;border-radius:3px;padding:4px 8px;}"
             "QPushButton:hover{background:#E53935;}"
             "QPushButton:pressed{background:#B71C1C;}"));
     } else {
-        T1start->setText(QStringLiteral("开始剪辑"));
+        T1start->setText(tr("开始剪辑"));
         T1start->setStyleSheet(cutStartStyle_);
     }
     // 执行期间锁住时间轴与输入，避免中途改参数
@@ -687,14 +853,14 @@ void MainWindow::setBusy(bool busy) {
 void MainWindow::runTasks(std::vector<std::shared_ptr<lr::ITask>> jobs) {
     if (jobs.empty()) return;
     if (busy_) {
-        appendLog(QStringLiteral("已有任务在执行，请先等待完成或点击停止。"),
+        appendLog(tr("已有任务在执行，请先等待完成或点击停止。"),
                   lr::logcolor::kWarn);
         return;
     }
     if (!FfmpegApi::instance().isLoaded()) {
         QMessageBox::critical(
-            this, QStringLiteral("FFmpeg 未就绪"),
-            QStringLiteral("FFmpeg 动态库还没有加载完成（或加载失败），"
+            this, tr("FFmpeg 未就绪"),
+            tr("FFmpeg 动态库还没有加载完成（或加载失败），"
                            "暂时无法执行任务。\n"
                            "详情请看下方日志区。"));
         return;
@@ -734,7 +900,7 @@ void MainWindow::runTasks(std::vector<std::shared_ptr<lr::ITask>> jobs) {
 void MainWindow::stopTasks() {
     if (!busy_) return;
     stopAll_.store(true);
-    appendLog(QStringLiteral("正在停止，等待当前任务正常收尾…"),
+    appendLog(tr("正在停止，等待当前任务正常收尾…"),
               lr::logcolor::kWarn);
     for (auto &job : jobs_) {
         job->requestStop();
@@ -744,28 +910,34 @@ void MainWindow::stopTasks() {
 // ---------------- 通用辅助 ----------------
 
 void MainWindow::pickVideoFile(QLineEdit *target) {
+    // 过滤器 = 本地化的"视频文件"标签 + pathutil 给的扩展名通配符
+    // （扩展名与语言无关，标签要翻译，所以在界面层拼）
     const QString path = QFileDialog::getOpenFileName(
-        this, QStringLiteral("选择视频文件"), QString(),
-        QString::fromStdString(lr::pathutil::videoFileFilter()));
+        this, tr("选择视频文件"), QString(),
+        QStringLiteral("%1 (%2)")
+            .arg(tr("视频文件"),
+                 QString::fromStdString(lr::pathutil::videoFilterPattern())));
     if (!path.isEmpty()) target->setText(path);
 }
 
 void MainWindow::pickAudioFile() {
     const QString path = QFileDialog::getOpenFileName(
-        this, QStringLiteral("选择音频文件"), QString(),
-        QString::fromStdString(lr::pathutil::audioFileFilter()));
+        this, tr("选择音频文件"), QString(),
+        QStringLiteral("%1 (%2)")
+            .arg(tr("音频文件"),
+                 QString::fromStdString(lr::pathutil::audioFilterPattern())));
     if (!path.isEmpty()) T4audio->setText(path);
 }
 
 bool MainWindow::checkSource(const QString &path) {
     if (path.isEmpty()) {
-        QMessageBox::warning(this, QStringLiteral("缺少输入"),
-                             QStringLiteral("请先选择一个输入文件。"));
+        QMessageBox::warning(this, tr("缺少输入"),
+                             tr("请先选择一个输入文件。"));
         return false;
     }
     if (!QFileInfo::exists(path)) {
-        QMessageBox::warning(this, QStringLiteral("文件不存在"),
-                             QStringLiteral("找不到文件：\n%1").arg(path));
+        QMessageBox::warning(this, tr("文件不存在"),
+                             tr("找不到文件：\n%1").arg(path));
         return false;
     }
     return true;
@@ -840,17 +1012,17 @@ void MainWindow::setupTimeline() {
             if (!stats.anyDamage()) return;
             QStringList parts;
             if (stats.videoBadBlocks > 0)
-                parts << QStringLiteral("视频跳过 %1 个损坏包").arg(stats.videoBadBlocks);
+                parts << tr("视频跳过 %1 个损坏包").arg(stats.videoBadBlocks);
             if (stats.videoRecovered > 0)
-                parts << QStringLiteral("%1 段画面沿用上一帧").arg(stats.videoRecovered);
+                parts << tr("%1 段画面沿用上一帧").arg(stats.videoRecovered);
             if (stats.audioBadBlocks > 0)
-                parts << QStringLiteral("音频跳过 %1 个损坏包").arg(stats.audioBadBlocks);
+                parts << tr("音频跳过 %1 个损坏包").arg(stats.audioBadBlocks);
             if (stats.audioConcealed > 0)
-                parts << QStringLiteral("%1 处声音做了隐藏补偿").arg(stats.audioConcealed);
+                parts << tr("%1 处声音做了隐藏补偿").arg(stats.audioConcealed);
             if (stats.audioDropped)
-                parts << QStringLiteral("音轨损坏严重，本次播放无声音");
-            appendLog(QStringLiteral("⚠ 素材存在损坏，播放已尽量补救：%1")
-                          .arg(parts.join(QStringLiteral("，"))),
+                parts << tr("音轨损坏严重，本次播放无声音");
+            appendLog(tr("⚠ 素材存在损坏，播放已尽量补救：%1")
+                          .arg(parts.join(tr("，"))),
                       lr::logcolor::kWarn);
         }, Qt::QueuedConnection);
     });
@@ -908,7 +1080,7 @@ void MainWindow::setupTimeline() {
         // 冒烟才打：段完成的**顺序**能看出"可见区优先"是否生效
         const QString smokeLine =
             qEnvironmentVariableIsSet("LRCONVERT_SMOKE_TEST")
-                ? QStringLiteral("[SMOKE] 波形段 %1 %2~%3 %4/%5")
+                ? tr("[SMOKE] 波形段 %1 %2~%3 %4/%5")
                       .arg(index)
                       .arg(formatTimecode(t0), formatTimecode(t1))
                       .arg(done)
@@ -922,7 +1094,7 @@ void MainWindow::setupTimeline() {
                 if (timeline_) timeline_->update();
                 if (!smokeLine.isEmpty()) qInfo().noquote() << smokeLine;
                 if (done >= total && total > 0) {
-                    appendLog(QStringLiteral("波形计算完成（%1 段）").arg(total),
+                    appendLog(tr("波形计算完成（%1 段）").arg(total),
                               lr::logcolor::kMuted);
                 }
             },
@@ -936,7 +1108,7 @@ void MainWindow::setupTimeline() {
             this,
             [this, guard, token, msg]() {
                 if (!guard) return;
-                appendLog(QStringLiteral("波形分段失败：") + msg, lr::logcolor::kMuted);
+                appendLog(tr("波形分段失败：") + msg, lr::logcolor::kMuted);
                 rebuildCutWaveform(token);  // 兜底：整段算不出来就退回只算可见区间
             },
             Qt::QueuedConnection);
@@ -1046,7 +1218,7 @@ void MainWindow::keepWindowOnScreen() {
 
 void MainWindow::updateCutInfoBar() {
     if (!cutInfo_.valid) {
-        T1info->setText(QStringLiteral("尚未选择文件"));
+        T1info->setText(tr("尚未选择文件"));
         return;
     }
     QStringList parts;
@@ -1098,13 +1270,13 @@ void MainWindow::loadCutSource() {
     const QString path = T1file->text().trimmed();
     if (path.isEmpty()) return;
     if (!QFileInfo::exists(path)) {
-        appendLog(QStringLiteral("文件不存在：") + path, lr::logcolor::kWarn);
+        appendLog(tr("文件不存在：") + path, lr::logcolor::kWarn);
         return;
     }
     if (!FfmpegApi::instance().isLoaded()) {
         cutLoaded_ = false;
         setBusy(busy_);
-        appendLog(QStringLiteral("FFmpeg 尚未就绪，等加载完成后会自动导入该视频。"),
+        appendLog(tr("FFmpeg 尚未就绪，等加载完成后会自动导入该视频。"),
                   lr::logcolor::kMuted);
         return;
     }
@@ -1122,7 +1294,7 @@ void MainWindow::loadCutSource() {
     cutPeaks_.reset();
     timeline_->clearMedia();
     T1duration->setText(formatTimecode(0.0));
-    appendLog(QStringLiteral("正在导入 %1 …").arg(QFileInfo(path).fileName()),
+    appendLog(tr("正在导入 %1 …").arg(QFileInfo(path).fileName()),
               lr::logcolor::kStep);
 
     auto guard = QPointer<MainWindow>(this);
@@ -1139,24 +1311,31 @@ void MainWindow::loadCutSource() {
         std::string openError;
         int badBlocks = 0;  // 取这几张图时跳过了多少损坏包
         {
-            std::lock_guard<std::mutex> lock(cutGrabberMutex_);
+            // P2-10：这一整段（打开文件 + 6 次 seek 解码）跑在**本地**取帧器上，
+            // 一把锁都不占 —— 导入长视频要花几秒，期间拖标尺、刷预览帧都不该等它。
+            // 只有最后交还/open失败的那一瞬间才进锁，锁内连一次 I/O 都没有。
+            lr::FrameGrabber local;
             std::string error;
-            if (cutGrabber_.open(api, src, error)) {
+            if (local.open(api, src, error)) {
                 for (int i = 0; i < int(thumbs.size()); ++i) {
                     const double t = info.durationSec * kThumbFrac[i];
                     lr::FrameGrabber::Frame frame;
-                    if (cutGrabber_.grabAt(t, 320, 180, frame, error)) {
+                    if (local.grabAt(t, 320, 180, frame, error)) {
                         thumbs[i] = toQImage(frame.rgb, frame.width, frame.height);
                     }
                 }
                 lr::FrameGrabber::Frame first;
-                if (cutGrabber_.grabAt(0.0, 0, 0, first, error)) {
+                if (local.grabAt(0.0, 0, 0, first, error)) {
                     preview = toQImage(first.rgb, first.width, first.height);
                 }
+                badBlocks = local.badBlocks();
             } else {
                 openError = error;
             }
-            badBlocks = cutGrabber_.badBlocks();
+            std::lock_guard<std::timed_mutex> lock(cutGrabberMutex_);
+            // 这期间用户换了片子就不要再往回塞了：那份取帧器属于旧文件，
+            // 塞进去会把新的一次 open 顶掉（下面的 cancelCheck 同理）。
+            if (token == cutToken_) cutGrabber_ = std::move(local);
         }
 
         QMetaObject::invokeMethod(
@@ -1164,13 +1343,13 @@ void MainWindow::loadCutSource() {
                 if (!guard || token != cutToken_) return;
                 cutLoading_ = false;
                 if (!openError.empty()) {
-                    appendLog(QStringLiteral("取帧器打开失败：") +
+                    appendLog(tr("取帧器打开失败：") +
                                   QString::fromStdString(openError),
                               lr::logcolor::kWarn);
                 }
                 if (!info.valid) {
                     cutLoaded_ = false;
-                    appendLog(QStringLiteral("导入失败：") + QString::fromStdString(info.error),
+                    appendLog(tr("导入失败：") + QString::fromStdString(info.error),
                               lr::logcolor::kError);
                     setBusy(busy_);
                     return;
@@ -1192,13 +1371,13 @@ void MainWindow::loadCutSource() {
                 setPreviewImage(preview);
                 setBusy(busy_);
 
-                appendLog(QStringLiteral("已导入：%1 %2")
+                appendLog(tr("已导入：%1 %2")
                               .arg(QFileInfo(cutSource_).fileName(),
                                    formatTimecode(info.durationSec)),
                           lr::logcolor::kOk);
                 // 导入时就发现损坏：提前打声招呼，别等用户剪到一半才发现素材有问题
                 if (badBlocks > 0) {
-                    appendLog(QStringLiteral("⚠ 这份素材有 %1 个损坏的数据包，"
+                    appendLog(tr("⚠ 这份素材有 %1 个损坏的数据包，"
                                              "取帧时已跳过（画面可能不完整）")
                                   .arg(badBlocks),
                               lr::logcolor::kWarn);
@@ -1224,7 +1403,7 @@ void MainWindow::startCutBackgroundAssets(int token) {
             if (!guard || token != cutToken_ || !timeline_) return;
             cutKeyframes_ = keys;
             timeline_->setKeyframes(keys);
-            appendLog(QStringLiteral("关键帧 %1 个").arg(keys.size()), lr::logcolor::kMuted);
+            appendLog(tr("关键帧 %1 个").arg(keys.size()), lr::logcolor::kMuted);
         }, Qt::QueuedConnection);
     });
 
@@ -1235,7 +1414,7 @@ void MainWindow::startCutBackgroundAssets(int token) {
 void MainWindow::startFullWaveform(int token) {
     if (!cutLoaded_ || !timeline_) return;
     if (!cutInfo_.hasAudio) {
-        appendLog(QStringLiteral("该视频没有音轨，不绘制波形。"), lr::logcolor::kMuted);
+        appendLog(tr("该视频没有音轨，不绘制波形。"), lr::logcolor::kMuted);
         return;
     }
     const double duration = cutInfo_.durationSec;
@@ -1263,7 +1442,7 @@ void MainWindow::startFullWaveform(int token) {
                 FfmpegApi::instance(), cutSource_.toStdString(), duration, pps,
                 kWaveSegments, kWaveWorkers, peaks);
             if (!started) {
-                appendLog(QStringLiteral("波形计算未能启动。"), lr::logcolor::kMuted);
+                appendLog(tr("波形计算未能启动。"), lr::logcolor::kMuted);
             }
         }, Qt::QueuedConnection);
     });
@@ -1289,7 +1468,7 @@ void MainWindow::rebuildCutWaveform(int token) {
         QMetaObject::invokeMethod(this, [this, guard, token, waveToken, peaks, ok, error]() {
             if (!guard || token != cutToken_ || waveToken != cutPeaksToken_ || !timeline_) return;
             if (!ok || peaks->empty()) {
-                appendLog(QStringLiteral("波形生成失败：") + QString::fromStdString(error),
+                appendLog(tr("波形生成失败：") + QString::fromStdString(error),
                           lr::logcolor::kMuted);
                 return;
             }
@@ -1337,12 +1516,16 @@ void MainWindow::refreshCutPreview() {
     (void)QtConcurrent::run([this, guard, sec, token]() {
         QImage image;
         {
-            std::lock_guard<std::mutex> lock(cutGrabberMutex_);
-            if (!cutGrabber_.isOpen()) return;
-            lr::FrameGrabber::Frame frame;
-            std::string error;
-            if (cutGrabber_.grabAt(sec, 0, 0, frame, error)) {
-                image = toQImage(frame.rgb, frame.width, frame.height);
+            // P2-10：这一拍抢不到取帧器就放弃（60ms），下一拍 tick 还会再来。
+            // 拖标尺是连续动作，丢一帧中间画面用户看不出来；排着队等锁才看得出。
+            if (tryLockGrabber(cutGrabberMutex_, 60)) {
+                std::lock_guard<std::timed_mutex> lock(cutGrabberMutex_, std::adopt_lock);
+                if (!cutGrabber_.isOpen()) return;
+                lr::FrameGrabber::Frame frame;
+                std::string error;
+                if (cutGrabber_.grabAt(sec, 0, 0, frame, error)) {
+                    image = toQImage(frame.rgb, frame.width, frame.height);
+                }
             }
         }
         QMetaObject::invokeMethod(this, [this, guard, token, image]() {
@@ -1373,7 +1556,7 @@ void MainWindow::startPlayback() {
         // 传 0×0 = 保持原始分辨率，画面由预览窗按窗口尺寸缩放显示
         if (!player_.open(FfmpegApi::instance(), cutSource_.toStdString(),
                           cutInfo_.fps, 0, 0, error)) {
-            appendLog(QStringLiteral("无法播放：") + QString::fromStdString(error),
+            appendLog(tr("无法播放：") + QString::fromStdString(error),
                       lr::logcolor::kWarn);
             return;
         }
@@ -1389,10 +1572,10 @@ void MainWindow::startPlayback() {
     playRunning_ = true;
     player_.play(from, to);
     updatePlayButton();
-    appendLog(QStringLiteral("播放 %1 → %2%3")
+    appendLog(tr("播放 %1 → %2%3")
                   .arg(formatTimecode(from), formatTimecode(to),
-                       player_.hasAudioTrack() ? QStringLiteral("（含声音）")
-                                               : QStringLiteral("（无音轨，只有画面）")),
+                       player_.hasAudioTrack() ? tr("（含声音）")
+                                               : tr("（无音轨，只有画面）")),
               lr::logcolor::kStep);
 }
 
@@ -1425,14 +1608,14 @@ void MainWindow::onPlaybackEnded() {
 
 void MainWindow::updatePlayButton() {
     if (playRunning_) {
-        T1play->setText(QStringLiteral("■ 停止"));
+        T1play->setText(tr("■ 停止"));
         T1play->setStyleSheet(QStringLiteral(
             "QPushButton{background:#D32F2F;color:#FFFFFF;border:1px solid "
             "#B71C1C;border-radius:3px;padding:4px 8px;}"
             "QPushButton:hover{background:#E53935;}"
             "QPushButton:pressed{background:#B71C1C;}"));
     } else {
-        T1play->setText(QStringLiteral("▶ 播放"));
+        T1play->setText(tr("▶ 播放"));
         T1play->setStyleSheet(playStyle_);
     }
     T1play->setEnabled(engineReady_ && cutLoaded_);
@@ -1476,17 +1659,17 @@ void MainWindow::applySnappedRange() {
     const double end = snapEndSec(rawEnd);
 
     if (std::abs(start - rawStart) > 1e-6) {
-        appendLog(QStringLiteral("起点 %1 → 吸附到右侧最近关键帧 %2")
+        appendLog(tr("起点 %1 → 吸附到右侧最近关键帧 %2")
                       .arg(formatTimecode(rawStart), formatTimecode(start)),
                   lr::logcolor::kMuted);
     }
     if (std::abs(end - rawEnd) > 1e-6) {
-        appendLog(QStringLiteral("终点 %1 → 吸附到左侧最近关键帧 %2")
+        appendLog(tr("终点 %1 → 吸附到左侧最近关键帧 %2")
                       .arg(formatTimecode(rawEnd), formatTimecode(end)),
                   lr::logcolor::kMuted);
     }
     if (end <= start) {
-        appendLog(QStringLiteral("吸附后起点不早于终点（%1 ~ %2），保持原选择不变。")
+        appendLog(tr("吸附后起点不早于终点（%1 ~ %2），保持原选择不变。")
                       .arg(formatTimecode(start), formatTimecode(end)),
                   lr::logcolor::kWarn);
         // 关键：吸附把区间吸反了（关键帧稀疏、或文件损坏导致关键帧表异常时
@@ -1506,14 +1689,14 @@ void MainWindow::onCutStartEdited() {
     const auto parsed =
         lr::timeutil::parseTimestamp(T1time1->text().trimmed().toStdString());
     if (!parsed) {
-        appendLog(QStringLiteral("时间格式错误，请写成 00:00:00 或 00:00:02.500 或 90（秒）。"),
+        appendLog(tr("时间格式错误，请写成 00:00:00 或 00:00:02.500 或 90（秒）。"),
                   lr::logcolor::kWarn);
         syncCutTimeEdits();
         return;
     }
     const double t = snapStartSec(std::clamp(*parsed, 0.0, timeline_->durationSec()));
     if (t >= timeline_->endSec()) {
-        appendLog(QStringLiteral("起点不能晚于终点。"), lr::logcolor::kWarn);
+        appendLog(tr("起点不能晚于终点。"), lr::logcolor::kWarn);
         syncCutTimeEdits();
         return;
     }
@@ -1526,14 +1709,14 @@ void MainWindow::onCutEndEdited() {
     const auto parsed =
         lr::timeutil::parseTimestamp(T1time2->text().trimmed().toStdString());
     if (!parsed) {
-        appendLog(QStringLiteral("时间格式错误，请写成 00:00:00 或 00:00:02.500 或 90（秒）。"),
+        appendLog(tr("时间格式错误，请写成 00:00:00 或 00:00:02.500 或 90（秒）。"),
                   lr::logcolor::kWarn);
         syncCutTimeEdits();
         return;
     }
     const double t = snapEndSec(std::clamp(*parsed, 0.0, timeline_->durationSec()));
     if (t <= timeline_->startSec()) {
-        appendLog(QStringLiteral("终点不能早于起点。"), lr::logcolor::kWarn);
+        appendLog(tr("终点不能早于起点。"), lr::logcolor::kWarn);
         syncCutTimeEdits();
         return;
     }
@@ -1545,12 +1728,12 @@ void MainWindow::setCutStart() {
     if (!cutLoaded_ || !timeline_) return;
     const double cursor = timeline_->cursorSec();
     if (cursor >= timeline_->endSec()) {
-        appendLog(QStringLiteral("当前帧已晚于终点，不能设为起点。"), lr::logcolor::kWarn);
+        appendLog(tr("当前帧已晚于终点，不能设为起点。"), lr::logcolor::kWarn);
         return;
     }
     const double snapped = snapStartSec(cursor);
     timeline_->setStartSec(snapped);
-    appendLog(QStringLiteral("起点设为 %1").arg(formatTimecode(snapped)),
+    appendLog(tr("起点设为 %1").arg(formatTimecode(snapped)),
               lr::logcolor::kStep);
     syncCutTimeEdits();
 }
@@ -1559,12 +1742,12 @@ void MainWindow::setCutEnd() {
     if (!cutLoaded_ || !timeline_) return;
     const double cursor = timeline_->cursorSec();
     if (cursor <= timeline_->startSec()) {
-        appendLog(QStringLiteral("当前帧已早于起点，不能设为终点。"), lr::logcolor::kWarn);
+        appendLog(tr("当前帧已早于起点，不能设为终点。"), lr::logcolor::kWarn);
         return;
     }
     const double snapped = snapEndSec(cursor);
     timeline_->setEndSec(snapped);
-    appendLog(QStringLiteral("终点设为 %1").arg(formatTimecode(snapped)),
+    appendLog(tr("终点设为 %1").arg(formatTimecode(snapped)),
               lr::logcolor::kStep);
     syncCutTimeEdits();
 }
@@ -1596,14 +1779,17 @@ void MainWindow::refreshCutTimelineAssets() {
     (void)QtConcurrent::run([this, guard, token, from, span]() {
         std::array<QImage, lr::ui::TimelineWidget::kThumbCount> thumbs;
         {
-            std::lock_guard<std::mutex> lock(cutGrabberMutex_);
-            if (cutGrabber_.isOpen()) {
-                for (int i = 0; i < int(thumbs.size()); ++i) {
-                    const double t = from + span * kThumbFrac[i];
-                    lr::FrameGrabber::Frame frame;
-                    std::string error;
-                    if (cutGrabber_.grabAt(t, 320, 180, frame, error)) {
-                        thumbs[i] = toQImage(frame.rgb, frame.width, frame.height);
+            // P2-10：与预览帧同理 —— 缩略图是节流任务，抢不到就跳过这一拍。
+            if (tryLockGrabber(cutGrabberMutex_, 60)) {
+                std::lock_guard<std::timed_mutex> lock(cutGrabberMutex_, std::adopt_lock);
+                if (cutGrabber_.isOpen()) {
+                    for (int i = 0; i < int(thumbs.size()); ++i) {
+                        const double t = from + span * kThumbFrac[i];
+                        lr::FrameGrabber::Frame frame;
+                        std::string error;
+                        if (cutGrabber_.grabAt(t, 320, 180, frame, error)) {
+                            thumbs[i] = toQImage(frame.rgb, frame.width, frame.height);
+                        }
                     }
                 }
             }
@@ -1627,8 +1813,8 @@ void MainWindow::cutFile() {
     const QString source = T1file->text().trimmed();
     if (!checkSource(source)) return;
     if (!cutLoaded_ || !timeline_) {
-        QMessageBox::warning(this, QStringLiteral("尚未载入视频"),
-                             QStringLiteral("请等视频导入完成（时间轴出现缩略图与波形）"
+        QMessageBox::warning(this, tr("尚未载入视频"),
+                             tr("请等视频导入完成（时间轴出现缩略图与波形）"
                                             "后再开始截取。"));
         return;
     }
@@ -1636,8 +1822,8 @@ void MainWindow::cutFile() {
     const double start = timeline_->startSec();
     const double end = timeline_->endSec();
     if (end <= start + 0.001) {
-        QMessageBox::warning(this, QStringLiteral("时间范围错误"),
-                             QStringLiteral("结束时间必须晚于开始时间（当前 %1 ~ %2）。")
+        QMessageBox::warning(this, tr("时间范围错误"),
+                             tr("结束时间必须晚于开始时间（当前 %1 ~ %2）。")
                                  .arg(formatTimecode(start), formatTimecode(end)));
         return;
     }
@@ -1645,7 +1831,7 @@ void MainWindow::cutFile() {
     const std::string src = source.toStdString();
     lr::RemuxSpec spec;
     spec.kind = lr::RemuxSpec::Kind::CopyAll;
-    spec.title = QStringLiteral("截取 %1").arg(QFileInfo(source).fileName())
+    spec.title = tr("截取 %1").arg(QFileInfo(source).fileName())
                      .toStdString();
     spec.inputs = {src};
     spec.output = lr::pathutil::outputPath(src, lr::pathutil::copySafeSuffix(src));
@@ -1653,7 +1839,7 @@ void MainWindow::cutFile() {
     spec.endSec = end;
     spec.muxerOptions = muxerOptionsFor(QString::fromStdString(spec.output));
 
-    appendLog(QStringLiteral("开始截取 %1 ~ %2（已按关键帧吸附）")
+    appendLog(tr("开始截取 %1 ~ %2（已按关键帧吸附）")
                   .arg(formatTimecode(start), formatTimecode(end)),
               lr::logcolor::kStep);
     runTasks({std::make_shared<lr::RemuxTask>(std::move(spec))});
@@ -1663,8 +1849,10 @@ void MainWindow::cutFile() {
 
 void MainWindow::addToList() {
     const QStringList paths = QFileDialog::getOpenFileNames(
-        this, QStringLiteral("添加视频（可多选）"), QString(),
-        QString::fromStdString(lr::pathutil::videoFileFilter()));
+        this, tr("添加视频（可多选）"), QString(),
+        QStringLiteral("%1 (%2)")
+            .arg(tr("视频文件"),
+                 QString::fromStdString(lr::pathutil::videoFilterPattern())));
     for (const QString &path : paths) T2listbox->addItem(path);
 }
 
@@ -1686,8 +1874,8 @@ void MainWindow::joinFiles() {
         files << T2listbox->item(i)->text();
     }
     if (files.size() < 2) {
-        QMessageBox::warning(this, QStringLiteral("文件不足"),
-                             QStringLiteral("请至少添加 2 个视频再连接。"));
+        QMessageBox::warning(this, tr("文件不足"),
+                             tr("请至少添加 2 个视频再连接。"));
         return;
     }
     QStringList missing;
@@ -1695,15 +1883,15 @@ void MainWindow::joinFiles() {
         if (!QFileInfo::exists(file)) missing << file;
     }
     if (!missing.isEmpty()) {
-        QMessageBox::warning(this, QStringLiteral("文件不存在"),
-                             QStringLiteral("以下文件不存在：\n%1")
+        QMessageBox::warning(this, tr("文件不存在"),
+                             tr("以下文件不存在：\n%1")
                                  .arg(missing.mid(0, 5).join(QStringLiteral("\n"))));
         return;
     }
 
     lr::RemuxSpec spec;
     spec.kind = lr::RemuxSpec::Kind::Concat;
-    spec.title = QStringLiteral("连接 %1 个视频").arg(files.size()).toStdString();
+    spec.title = tr("连接 %1 个视频").arg(files.size()).toStdString();
     for (const QString &file : files) spec.inputs.push_back(file.toStdString());
     const std::string first = files.first().toStdString();
     spec.output = lr::pathutil::outputPath(
@@ -1727,7 +1915,7 @@ void MainWindow::splitFile() {
     lr::RemuxSpec videoSpec;
     videoSpec.kind = lr::RemuxSpec::Kind::VideoOnly;
     videoSpec.title =
-        QStringLiteral("抽取视频轨 %1").arg(name).toStdString();
+        tr("抽取视频轨 %1").arg(name).toStdString();
     videoSpec.inputs = {src};
     videoSpec.output =
         lr::pathutil::outputPath(src, suffix, "-video", stamp);
@@ -1735,7 +1923,7 @@ void MainWindow::splitFile() {
     lr::RemuxSpec audioSpec;
     audioSpec.kind = lr::RemuxSpec::Kind::AudioOnly;
     audioSpec.title =
-        QStringLiteral("抽取音频轨 %1").arg(name).toStdString();
+        tr("抽取音频轨 %1").arg(name).toStdString();
     audioSpec.inputs = {src};
     audioSpec.output =
         lr::pathutil::outputPath(src, suffix, "-audio", stamp);
@@ -1754,7 +1942,7 @@ void MainWindow::mergeFile() {
     const std::string src = video.toStdString();
     lr::RemuxSpec spec;
     spec.kind = lr::RemuxSpec::Kind::Merge;
-    spec.title = QStringLiteral("合并 %1").arg(QFileInfo(video).fileName())
+    spec.title = tr("合并 %1").arg(QFileInfo(video).fileName())
                      .toStdString();
     spec.inputs = {src, audio.toStdString()};
     spec.shortest = true;  // 原命令里的 -shortest
@@ -1768,7 +1956,7 @@ void MainWindow::mergeFile() {
 
 void MainWindow::browseDir() {
     const QString directory =
-        QFileDialog::getExistingDirectory(this, QStringLiteral("选取文件夹"));
+        QFileDialog::getExistingDirectory(this, tr("选取文件夹"));
     if (directory.isEmpty()) return;
     T5file->setText(directory);
 
@@ -1785,28 +1973,28 @@ void MainWindow::browseDir() {
         }
     }
     std::sort(batchInputs_.begin(), batchInputs_.end());
-    T5info->setText(QStringLiteral("此文件夹中共有 %1 个视频文件，"
-                                   "批量转码耗时较长，请利用空闲时间进行转码！")
-                        .arg(batchInputs_.size()));
+    updateBatchInfoText();
 }
 
 void MainWindow::batchCode() {
     if (batchInputs_.empty()) {
-        QMessageBox::information(this, QStringLiteral("批量压缩"),
-                                 QStringLiteral("请先点击「浏览」选择一个文件夹。"));
+        QMessageBox::information(this, tr("批量压缩"),
+                                 tr("请先点击「浏览」选择一个文件夹。"));
         return;
     }
 
     // T5bit 里的数字单位是 Mbps（界面上写的是 1/2/4/8/12/16/20/30）
     const int videoKbps = T5bit->currentText().toInt() * 1000;
-    const std::string scale = T5size->currentText().toStdString();
+    // 分辨率取 userData 里的规范键（original/half/…），不是显示名——
+    // 显示名随语言变，键不变（见 fillScaleBox）
+    const std::string scale = T5size->currentData().toString().toStdString();
     const std::string encoder = lr::pathutil::lookup(
         lr::pathutil::hwEncoders(), T5hwacc->currentText().toStdString(),
         "libx264");
 
     const QMessageBox::StandardButton answer = QMessageBox::question(
-        this, QStringLiteral("批量压缩"),
-        QStringLiteral("即将对 %1 个视频重新编码，耗时较长。\n"
+        this, tr("批量压缩"),
+        tr("即将对 %1 个视频重新编码，耗时较长。\n"
                        "编码器：%2 ｜ 码率：%3 Mbps ｜ 分辨率：%4\n\n"
                        "确定开始吗？")
             .arg(batchInputs_.size())
@@ -1837,8 +2025,8 @@ void MainWindow::batchCode() {
 void MainWindow::customCode() {
     const QString src = T6file->text().trimmed();
     if (src.isEmpty() || !QFileInfo::exists(src)) {
-        QMessageBox::information(this, QStringLiteral("自定义编码"),
-                                 QStringLiteral("请先选择一个视频文件。"));
+        QMessageBox::information(this, tr("自定义编码"),
+                                 tr("请先选择一个视频文件。"));
         return;
     }
 
@@ -1852,7 +2040,7 @@ void MainWindow::customCode() {
         "libx264");
     spec.preset = T6speed->currentText().toStdString();
     spec.level = T6grade->currentText().toStdString();
-    spec.scale = T6type->currentText().toStdString();
+    spec.scale = T6type->currentData().toString().toStdString();
     spec.videoKbps = T6level->currentText().toInt() * 1000;
     spec.audioKbps = T6audio->currentText().toInt();
     spec.muxerOptions = muxerOptionsFor(QString::fromStdString(spec.output));
@@ -1868,22 +2056,17 @@ void MainWindow::checkVersion() {
     QNetworkReply *reply = net_->get(request);
     connect(reply, &QNetworkReply::finished, this, [this, reply]() {
         reply->deleteLater();
-        QString text = QStringLiteral("无法获取最新版本信息");
+        // 只存原始结果（版本号或空），文本的本地化在 updateVersionLabel() 里
+        // 做——这样切换语言后不用重新请求一遍网络
+        latestVersion_.clear();
         if (reply->error() == QNetworkReply::NoError) {
             const QString body = QString::fromUtf8(reply->readAll());
             const QRegularExpression re(
                 QStringLiteral("version:\\s*([0-9]+(?:\\.[0-9]+)*)"));
             const auto match = re.match(body);
-            if (match.hasMatch()) {
-                const QString latest = match.captured(1);
-                text = QStringLiteral("最新版本：%1").arg(latest);
-                if (versionGreater(parseVersion(latest),
-                                   parseVersion(QString::fromUtf8(lr::kAppVersion)))) {
-                    text += QStringLiteral("（有更新）");
-                }
-            }
+            if (match.hasMatch()) latestVersion_ = match.captured(1);
         }
-        T7new->setText(text);
+        updateVersionLabel();
     });
 }
 
@@ -1892,8 +2075,8 @@ void MainWindow::checkVersion() {
 void MainWindow::closeEvent(QCloseEvent *event) {
     if (busy_) {
         const QMessageBox::StandardButton answer = QMessageBox::question(
-            this, QStringLiteral("退出"),
-            QStringLiteral("任务正在执行，确定要退出吗？"),
+            this, tr("退出"),
+            tr("任务正在执行，确定要退出吗？"),
             QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
         if (answer != QMessageBox::Yes) {
             event->ignore();

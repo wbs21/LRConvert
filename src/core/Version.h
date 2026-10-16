@@ -19,7 +19,7 @@
 namespace lr {
 
 /// 应用版本号（形如 "4.0"）
-inline constexpr const char *kAppVersion = "4.0.1";
+inline constexpr const char *kAppVersion = "4.0.2";
 
 }  // namespace lr
 

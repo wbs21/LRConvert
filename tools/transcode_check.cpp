@@ -11,7 +11,10 @@
 //
 // 例：
 //   transcode_check in.mp4 out.mp4 libx264 4000 1280*720 128
-//   transcode_check in.mp4 out.mp4 h264_nvenc 8000 原始大小 160
+//   transcode_check in.mp4 out.mp4 h264_nvenc 8000 original 160
+//
+// 缩放预设用**规范键**（与界面语言无关）：original | half | quarter |
+// 1920*1080 | 1280*720。
 // ---------------------------------------------------------------------------
 
 #include <QCoreApplication>
@@ -30,7 +33,7 @@ void printHelp() {
         "用法：transcode_check <输入> <输出> [编码器] [视频kbps] [缩放] [音频kbps]\n"
         " 编码器   默认 libx264（h264_nvenc / h264_qsv / h264_amf 等亦可）\n"
         " 视频kbps 默认 4000\n"
-        " 缩放     原始大小 | 一半 | 四分之一 | 1920*1080 | 1280*720\n"
+        " 缩放     original | half | quarter | 1920*1080 | 1280*720（默认 original）\n"
         " 音频kbps 默认 128；传 0 表示不要音轨\n");
 }
 
@@ -46,14 +49,14 @@ int main(int argc, char *argv[]) {
 
     // 命令行参数用的是系统本地编码（Windows 中文环境下是 GBK），
     // 而 TranscodeSpec::scale 里存的是 UTF-8（与 GUI 的 QString 一致），
-    // 所以必须显式转换，否则中文的"一半 / 原始大小"会匹配不上。
+    // 所以必须显式转换。
     auto utf8 = [](const char *s) { return QString::fromLocal8Bit(s).toStdString(); };
 
     const std::string input = utf8(argv[1]);
     const std::string output = utf8(argv[2]);
     const std::string encoder = argc > 3 ? utf8(argv[3]) : "libx264";
     const int videoKbps = argc > 4 ? std::atoi(argv[4]) : 4000;
-    const std::string scale = argc > 5 ? utf8(argv[5]) : "原始大小";
+    const std::string scale = argc > 5 ? utf8(argv[5]) : "original";
     const int audioKbps = argc > 6 ? std::atoi(argv[6]) : 128;
 
     std::printf("[1] 加载 FFmpeg 动态库\n");

@@ -187,17 +187,17 @@ cli_transcode() {  # out in kbps scale audiokbps extra...
 }
 
 # B1 原始大小 / 4000k / 128k
-"$TC" "$HD" "$OUT/b1_ours.mp4" libx264 4000 原始大小 128 >"$OUT/b1.log" 2>&1
+"$TC" "$HD" "$OUT/b1_ours.mp4" libx264 4000 original 128 >"$OUT/b1.log" 2>&1
 cli_transcode "$OUT/b1_cli.mp4" "$HD" 4000 "scale=trunc(iw/2)*2:trunc(ih/2)*2" 128
 check "原始 4000k" "$OUT/b1_ours.mp4" "$OUT/b1_cli.mp4" no
 
 # B2 一半 / 2000k
-"$TC" "$HD" "$OUT/b2_ours.mp4" libx264 2000 一半 128 >"$OUT/b2.log" 2>&1
+"$TC" "$HD" "$OUT/b2_ours.mp4" libx264 2000 half 128 >"$OUT/b2.log" 2>&1
 cli_transcode "$OUT/b2_cli.mp4" "$HD" 2000 "scale=trunc(iw/4)*2:trunc(ih/4)*2" 128
 check "一半 2000k" "$OUT/b2_ours.mp4" "$OUT/b2_cli.mp4" no
 
 # B3 四分之一 / 1000k
-"$TC" "$HD" "$OUT/b3_ours.mp4" libx264 1000 四分之一 128 >"$OUT/b3.log" 2>&1
+"$TC" "$HD" "$OUT/b3_ours.mp4" libx264 1000 quarter 128 >"$OUT/b3.log" 2>&1
 cli_transcode "$OUT/b3_cli.mp4" "$HD" 1000 "scale=trunc(iw/8)*2:trunc(ih/8)*2" 128
 check "四分之一 1000k" "$OUT/b3_ours.mp4" "$OUT/b3_cli.mp4" no
 
@@ -207,12 +207,12 @@ cli_transcode "$OUT/b4_cli.mp4" "$HD" 4000 "scale=1280:720" 128
 check "指定1280x720" "$OUT/b4_ours.mp4" "$OUT/b4_cli.mp4" no
 
 # B5 无音轨
-"$TC" "$HD" "$OUT/b5_ours.mp4" libx264 4000 原始大小 0 >"$OUT/b5.log" 2>&1
+"$TC" "$HD" "$OUT/b5_ours.mp4" libx264 4000 original 0 >"$OUT/b5.log" 2>&1
 cli_transcode "$OUT/b5_cli.mp4" "$HD" 4000 "scale=trunc(iw/2)*2:trunc(ih/2)*2" 0
 check "无音轨" "$OUT/b5_ours.mp4" "$OUT/b5_cli.mp4" no
 
 # B6 MKV 容器
-"$TC" "$HD" "$OUT/b6_ours.mkv" libx264 4000 原始大小 128 >"$OUT/b6.log" 2>&1
+"$TC" "$HD" "$OUT/b6_ours.mkv" libx264 4000 original 128 >"$OUT/b6.log" 2>&1
 "$FFMPEG" -y -v error -i "$HD" -vf "scale=trunc(iw/2)*2:trunc(ih/2)*2" \
     -c:v libx264 -b:v 4000k -maxrate 6000k -bufsize 8000k -pix_fmt yuv420p \
     -profile:v high -preset:v fast -level 4.1 -c:a aac -b:a 128k "$OUT/b6_cli.mkv" \
@@ -220,7 +220,7 @@ check "无音轨" "$OUT/b5_ours.mp4" "$OUT/b5_cli.mp4" no
 check "MKV 容器" "$OUT/b6_ours.mkv" "$OUT/b6_cli.mkv" no
 
 # B7 硬件编码器回退（无 NVIDIA 显卡时应自动回退 libx264 并成功）
-"$TC" "$HD" "$OUT/b7_ours.mp4" h264_nvenc 4000 原始大小 128 >"$OUT/b7.log" 2>&1
+"$TC" "$HD" "$OUT/b7_ours.mp4" h264_nvenc 4000 original 128 >"$OUT/b7.log" 2>&1
 rc=$?
 if [[ $rc -eq 0 ]]; then
     enc=$("$FFPROBE" -v error -select_streams v -show_entries stream=codec_name \

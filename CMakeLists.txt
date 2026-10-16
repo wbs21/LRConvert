@@ -16,6 +16,18 @@ if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
     set(CMAKE_BUILD_TYPE Release CACHE STRING "构建类型" FORCE)
 endif()
 
+# ASan/UBSan 构建（P1-7 模糊测试体系用）：-DLRCONVERT_SANITIZE=ON
+# 单独用另一个 build 目录（如 build-asan），不要污染发布用的 build/。
+# swr 越界、toQImage 越界这类问题 ASan 会在测试期直接点名，而不是等用户
+# crash dump。注意 MinGW 的 ASan 在 Windows 上偶有误报，UBSan 相对干净；
+# 只用于开发/测试循环，不用于打包分发。
+option(LRCONVERT_SANITIZE "构建带 AddressSanitizer + UndefinedBehaviorSanitizer 的调试版" OFF)
+if(LRCONVERT_SANITIZE)
+    add_compile_options(-fsanitize=address,undefined -fno-omit-frame-pointer -g -O1)
+    add_link_options(-fsanitize=address,undefined)
+    message(STATUS "已启用 AddressSanitizer + UndefinedBehaviorSanitizer（测试构建）")
+endif()
+
 # 项目内的 FFmpeg 依赖副本（bin/ = 挑选后的运行时 DLL，include/ = 编译期头文件）
 #
 # 注意：这里是**副本**，不直接引用外部构建目录（ffmpeg-gpl-full/ 等）。
@@ -45,29 +57,52 @@ add_library(ffmpeg_runtime STATIC
     src/ffmpeg/AudioDecoder.cpp
     src/audio/AudioOutput.cpp
     src/player/FramePlayer.cpp
+    # libav* 对象的 RAII 包装（P2-11）：释放逻辑集中在这一个 .cpp 里
+    src/ffmpeg/FfObjects.cpp
+    # FFmpeg I/O 超时（P0-4）：interrupt_callback + 网络路径可达性探测
+    src/ffmpeg/IoTimeout.cpp
+    # 平台层：线程命名 + 大栈线程（P2-12）、崩溃转储与卡死看门狗（P0-1~P0-3）。
+    # 放进 ffmpeg_runtime 而不是只给主程序，是因为 WaveformBuilder /
+    # FramePlayer / FfmpegCapability 这些**不带界面**的成员也在用心跳和
+    # 大栈线程；capability_check / remux_check / transcode_check 同理。
+    # 这两个模块刻意不依赖 Qt，所以放进这层没有任何额外包袱。
+    src/platform/ThreadUtil.h
+    src/platform/ThreadUtil.cpp
+    src/platform/CrashDump.h
+    src/platform/CrashDump.cpp
 )
 target_include_directories(ffmpeg_runtime PUBLIC src "${FFMPEG_DIR}/include")
 
 # 播放要用 std::thread；音频输出走 Windows 的 waveOut（winmm.dll 系统自带），
 # 不引 Qt Multimedia —— 免得发布包里多带一份 Qt 自己的 FFmpeg 后端。
+# ThreadUtil 的大栈线程走 _beginthreadex（msvcrt），CrashDump 写注册表要 advapi32。
 find_package(Threads REQUIRED)
 target_link_libraries(ffmpeg_runtime PUBLIC Threads::Threads)
 if(WIN32)
-    target_link_libraries(ffmpeg_runtime PUBLIC winmm)
+    target_link_libraries(ffmpeg_runtime PUBLIC winmm advapi32)
 endif()
 
 # ===========================================================================
 # M0 验收工具：不依赖 Qt，任何时候都能构建
 #   用法：cmake -B build && cmake --build build && LRCONVERT_FFMPEG_DIR=... ./build/capability_check
 # ===========================================================================
+# FFmpeg 的 DLL 只拷**一次**到构建目录。
+#
+# 这里原来是四个目标各自 POST_BUILD 拷一份（都拷进 build/ffmpeg —— 它们的
+# TARGET_FILE_DIR 是同一个目录）。并行构建（-j8）时这四份拷贝会撞在一起：
+# 同名的 DLL 被两路同时写，cmake 直接报 "Error copying directory"，
+# 然后把已经链接好的 exe 当成失败产物删掉 —— 表现为"编译都过了，构建却失败"。
+# 改成单独一个 ALL 目标做这一件事，其余目标依赖它即可。
+add_custom_target(copy_ffmpeg_runtime ALL
+    COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_BINARY_DIR}/ffmpeg"
+    COMMAND ${CMAKE_COMMAND} -E copy_directory "${FFMPEG_DIR}/bin" "${CMAKE_BINARY_DIR}/ffmpeg"
+    COMMENT "复制 FFmpeg 动态库到构建目录的 ffmpeg/ 子目录"
+)
+
 add_executable(capability_check tools/capability_check.cpp)
 target_link_libraries(capability_check PRIVATE ffmpeg_runtime)
+add_dependencies(capability_check copy_ffmpeg_runtime)
 
-add_custom_command(TARGET capability_check POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:capability_check>/ffmpeg"
-    COMMAND ${CMAKE_COMMAND} -E copy_directory "${FFMPEG_DIR}/bin" "$<TARGET_FILE_DIR:capability_check>/ffmpeg"
-    COMMENT "复制 FFmpeg 动态库到 capability_check 所在目录"
-)
 
 # ===========================================================================
 # Tab1 时间轴的无界面验证工具：打印媒体信息 / 关键帧 / 抓帧 / 波形峰值
@@ -75,11 +110,7 @@ add_custom_command(TARGET capability_check POST_BUILD
 # ===========================================================================
 add_executable(media_check tools/media_check.cpp)
 target_link_libraries(media_check PRIVATE ffmpeg_runtime)
-add_custom_command(TARGET media_check POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:media_check>/ffmpeg"
-    COMMAND ${CMAKE_COMMAND} -E copy_directory "${FFMPEG_DIR}/bin" "$<TARGET_FILE_DIR:media_check>/ffmpeg"
-    COMMENT "复制 FFmpeg 动态库到 media_check 所在目录"
-)
+add_dependencies(media_check copy_ffmpeg_runtime)
 
 # ===========================================================================
 # 主程序：需要 Qt6（MinGW 版，必须与 FFmpeg 的 MinGW-w64 工具链一致）
@@ -99,7 +130,7 @@ if(NOT DEFINED Qt6_DIR AND "$ENV{CMAKE_PREFIX_PATH}" STREQUAL "" AND "${CMAKE_PR
     endif()
 endif()
 
-find_package(Qt6 COMPONENTS Widgets Network Concurrent QUIET)
+find_package(Qt6 COMPONENTS Widgets Network Concurrent LinguistTools QUIET)
 
 if(Qt6_FOUND)
     message(STATUS "找到 Qt6 ${Qt6_VERSION}，将构建主程序 LRConvert")
@@ -118,6 +149,35 @@ if(Qt6_FOUND)
         enable_language(RC)
     endif()
 
+    # -----------------------------------------------------------------------
+    # 多语言：lrelease 把 translations/*.ts 编成 .qm，生成的 qrc 把它们打进
+    # exe（默认英文不依赖外部文件，qrc 漏不掉）；exe 同级 translations/ 目录
+    # 里的同名 .qm 会在运行时覆盖内置版本（见 src/core/I18n.cpp），
+    # 以后加语言只要往目录里扔 .qm，不必重新编译。
+    #
+    # 注意顺序：qt_add_lrelease 建的是独立 custom target，靠下面的
+    # add_dependencies 保证 lrelease 先于 rcc 跑完（qrc 里引用了 .qm）。
+    # -----------------------------------------------------------------------
+    if(Qt6LinguistTools_FOUND)
+        qt_add_lrelease(LRELEASE_TARGET LRConvert_i18n TS_FILES
+            "${CMAKE_CURRENT_SOURCE_DIR}/translations/LRconvert_en.ts"
+            QM_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/i18n"
+        )
+        # 生成的 qrc 与 .qm 同目录，所以 <file> 用相对名即可
+        set(LR_I18N_QRC "${CMAKE_CURRENT_BINARY_DIR}/i18n/app_i18n.qrc")
+        file(WRITE "${LR_I18N_QRC}"
+"<RCC>
+  <qresource prefix=\"/translations\">
+    <file>LRconvert_en.qm</file>
+  </qresource>
+</RCC>
+")
+    else()
+        message(WARNING
+            "未找到 Qt6 LinguistTools —— 跳过翻译文件（.qm）构建，界面将只有中文。"
+            "安装 Qt 的 Linguist 组件后重新 configure 即可。")
+    endif()
+
     qt_add_executable(LRConvert
         src/main.cpp
         src/MainWindow.h
@@ -129,6 +189,8 @@ if(Qt6_FOUND)
         src/core/PathUtil.h
         src/core/PathUtil.cpp
         src/core/Version.h
+        src/core/I18n.h
+        src/core/I18n.cpp
         # 任务层：真正的 libav* 管线
         src/tasks/RemuxTask.h
         src/tasks/RemuxTask.cpp
@@ -141,9 +203,8 @@ if(Qt6_FOUND)
         # 窗口外框查询（BUG-001：还原后把标题栏拉回可见区；内部用 Win32，隔离在这里）
         src/platform/WindowFrame.h
         src/platform/WindowFrame.cpp
-        # 崩溃转储（SEH / std::terminate / abort → 写 .dmp；内部用 Win32，同上）
-        src/platform/CrashDump.h
-        src/platform/CrashDump.cpp
+        # ThreadUtil（P1-6/P2-12）与 CrashDump（P0-1~P0-3）都在 ffmpeg_runtime 里，
+        # 这里不再重复列出 —— 主程序链接 ffmpeg_runtime 即自动带上。
         resources/app.qrc
     )
     target_link_libraries(LRConvert PRIVATE
@@ -152,6 +213,13 @@ if(Qt6_FOUND)
         Qt6::Network
         Qt6::Concurrent
     )
+    add_dependencies(LRConvert copy_ffmpeg_runtime)
+    if(Qt6LinguistTools_FOUND)
+        # 生成的 qrc（内含 lrelease 产出的 .qm）也挂进目标；
+        # lrelease 必须先于 rcc 跑完，靠 target 级依赖保证
+        target_sources(LRConvert PRIVATE "${LR_I18N_QRC}")
+        add_dependencies(LRConvert LRConvert_i18n)
+    endif()
     set_target_properties(LRConvert PROPERTIES WIN32_EXECUTABLE ON)
     # .rc 只在 Windows 上加：别的平台没有 windres，列进源列表会让 CMake 报错
     if(WIN32)
@@ -168,11 +236,18 @@ if(Qt6_FOUND)
     # 时会优先命中这些同名 DLL（exe 目录优先级最高），版本对不上就直接
     # 让整个进程启动失败（退出码 127，且没有任何错误提示）。
     # 放进子目录后由 FfmpegApi 用绝对路径加载，与 Qt 的 DLL 物理隔离。
-    add_custom_command(TARGET LRConvert POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:LRConvert>/ffmpeg"
-        COMMAND ${CMAKE_COMMAND} -E copy_directory "${FFMPEG_DIR}/bin" "$<TARGET_FILE_DIR:LRConvert>/ffmpeg"
-        COMMENT "复制 FFmpeg 动态库到 LRConvert 同级的 ffmpeg/ 子目录"
-    )
+
+    # 语言文件也放一份到 exe 同级的 translations/：与内置 qrc 内容相同，
+    # 但让 scripts/run.sh 跑起来的程序走"磁盘优先"那条路（覆盖机制可测）
+    if(Qt6LinguistTools_FOUND)
+        add_custom_command(TARGET LRConvert POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:LRConvert>/translations"
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${CMAKE_CURRENT_BINARY_DIR}/i18n/LRconvert_en.qm"
+                "$<TARGET_FILE_DIR:LRConvert>/translations/LRconvert_en.qm"
+            COMMENT "复制语言文件到 LRConvert 同级的 translations/ 子目录"
+        )
+    endif()
 
     # RemuxTask 的无界面验证工具：走的是与 GUI 完全相同的代码路径
     qt_add_executable(remux_check
@@ -189,16 +264,14 @@ if(Qt6_FOUND)
         ffmpeg_runtime
         Qt6::Core
     )
-    add_custom_command(TARGET remux_check POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:remux_check>/ffmpeg"
-        COMMAND ${CMAKE_COMMAND} -E copy_directory "${FFMPEG_DIR}/bin" "$<TARGET_FILE_DIR:remux_check>/ffmpeg"
-        COMMENT "复制 FFmpeg 动态库到 remux_check 同级的 ffmpeg/ 子目录"
-    )
+    add_dependencies(remux_check copy_ffmpeg_runtime)
 
     # TranscodeTask 的无界面验证工具（M5 压缩管线）
     qt_add_executable(transcode_check
         tools/transcode_check.cpp
         src/core/ITask.h
+        src/core/PathUtil.h
+        src/core/PathUtil.cpp
         src/tasks/TranscodeTask.h
         src/tasks/TranscodeTask.cpp
     )
@@ -206,11 +279,7 @@ if(Qt6_FOUND)
         ffmpeg_runtime
         Qt6::Core
     )
-    add_custom_command(TARGET transcode_check POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:transcode_check>/ffmpeg"
-        COMMAND ${CMAKE_COMMAND} -E copy_directory "${FFMPEG_DIR}/bin" "$<TARGET_FILE_DIR:transcode_check>/ffmpeg"
-        COMMENT "复制 FFmpeg 动态库到 transcode_check 同级的 ffmpeg/ 子目录"
-    )
+    add_dependencies(transcode_check copy_ffmpeg_runtime)
 else()
     message(STATUS "")
     message(STATUS "未找到 Qt6 —— 本次只构建 capability_check（不依赖 Qt）。")

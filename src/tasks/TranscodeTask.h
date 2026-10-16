@@ -49,11 +49,11 @@ struct TranscodeSpec {
     /// 音频目标码率（kbps）；<=0 表示不输出音频轨
     int audioKbps = 128;
 
-    /// 分辨率预设的**显示名**，取值来自 pathutil::scaleFilters() 的键
-    ///（"原始大小" / "一半" / "四分之一" / "1920*1080" / "1280*720"）。
-    /// 之所以传显示名而不是宽高，是因为"一半/四分之一"是相对缩放，
-    /// 必须在读到源尺寸后才算得出来。
-    std::string scale = "原始大小";
+    /// 分辨率预设的**规范键**（与语言无关），取值来自 pathutil::scaleFilters()
+    /// 的键（"original" / "half" / "quarter" / "1920*1080" / "1280*720"）。
+    /// 之所以传键而不是界面显示名，是因为"一半/四分之一"是相对缩放，
+    /// 必须在读到源尺寸后才算得出来；显示名会随语言变，键不会。
+    std::string scale = "original";
 
     /// x264 风格 preset（硬件编码器会自动忽略）
     std::string preset = "fast";

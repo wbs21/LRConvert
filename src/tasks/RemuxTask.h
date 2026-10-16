@@ -63,6 +63,14 @@ public:
     void requestStop() override { cancel_.store(true); }
 
 private:
+    /// 真正的管线实现。异常收敛（P2-9）与"临时文件最后的去留"由 run() 负责，
+    /// 这里只管做事，可以随时 return / 抛异常：
+    /// libav* 对象都是 RAII（P2-11），异常路径一样不泄漏。
+    ///
+    /// @param tempPath 实际写入位置（原子落盘用的临时文件），由 run() 收尾。
+    ///                 一直到 closeFormatFile 之前都还没"晋升"为最终文件。
+    bool runInner(TaskSignals &sig, std::string &tempPath);
+
     RemuxSpec spec_;
     std::atomic<bool> cancel_{false};
 };

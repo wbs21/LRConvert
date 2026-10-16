@@ -13,6 +13,10 @@ test
 # 本地测试素材（如 video/*.mp4，体积大），不入库
 video/
 
+# 翻译构建产物：.ts 源文件入库，.qm 由 lrelease 生成到 build/i18n/，
+# 打包脚本复制到发布包 translations/；此规则防止 .qm 误入源码 translations/
+translations/*.qm
+
 # WorkBuddy 代理工作数据（记忆/日志），非项目资产
 .workbuddy/
 

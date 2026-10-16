@@ -3,8 +3,11 @@
 
 #include "ffmpeg/WaveformBuilder.h"
 
+#include "platform/CrashDump.h"
+
 #include <algorithm>
 #include <cmath>
+#include <string>
 
 namespace lr {
 namespace {
@@ -21,6 +24,8 @@ bool buildSegment(FfmpegApi &api, const std::string &path, double t0, double t1,
         // 换文件时要能立刻收工：否则 stop() 的 join 会卡住 GUI 线程
         // （一小时片子的一段就是好几分钟音频）
         if (stop.load(std::memory_order_relaxed)) return true;
+        // 看门狗心跳（P0-1）：这个线程还活着，而且正在推进
+        lr::platform::heartbeat(lr::platform::Heartbeat::Waveform);
         double t = startSec;
         for (int i = 0; i < count; ++i, t += sampleStep) {
             if (t >= t1) return true;    // 越过段尾，这段算完了
@@ -78,15 +83,25 @@ bool WaveformBuilder::start(FfmpegApi &api, const std::string &path, double dura
     doneCount_ = 0;
     stopFlag_ = false;
     running_ = true;
+    // 看门狗开始盯这个子系统（P0-1）：没在算波形时没有心跳是正常的，
+    // 算起来之后 15 秒不打点就会被判定卡死并留一份 dump
+    lr::platform::setExpected(lr::platform::Heartbeat::Waveform, true);
+    // worker 名用静态表：名字要活到线程结束，不能是循环里的局部 string
+    static const char *const kWorkerNames[] = {
+        "LRDecode-Waveform#1",  "LRDecode-Waveform#2",  "LRDecode-Waveform#3",
+        "LRDecode-Waveform#4",  "LRDecode-Waveform#5",  "LRDecode-Waveform#6",
+        "LRDecode-Waveform#7",  "LRDecode-Waveform#8",  "LRDecode-Waveform#9",
+        "LRDecode-Waveform#10", "LRDecode-Waveform#11", "LRDecode-Waveform#12",
+        "LRDecode-Waveform#13", "LRDecode-Waveform#14", "LRDecode-Waveform#15",
+        "LRDecode-Waveform#16"};
+    threads_.reserve(static_cast<std::size_t>(workers));
     for (int i = 0; i < workers; ++i) {
-        threads_.emplace_back([this, &api, path]() {
-            // 同 FramePlayer：异常逃出线程就是 std::terminate()，整个进程没了。
-            // 一个 worker 挂掉不影响别的 —— 剩下的段还会被其他 worker 领走。
-            try {
-                workerMain(&api, path);
-            } catch (...) {
-            }
-        });
+        const char *name = (i < 16) ? kWorkerNames[i] : "LRDecode-Waveform";
+        // 同 FramePlayer：异常逃出线程就是 std::terminate()，整个进程没了。
+        // 一个 worker 挂掉不影响别的 —— 剩下的段还会被其他 worker 领走。
+        // （BigStackThread 的入口也兜了一层 try/catch。）
+        threads_.emplace_back([this, apiPtr = &api, path]() { workerMain(apiPtr, path); },
+                              name);
     }
     return true;
 }
@@ -98,6 +113,7 @@ void WaveformBuilder::stop() {
     }
     threads_.clear();
     running_ = false;
+    lr::platform::setExpected(lr::platform::Heartbeat::Waveform, false);
     {
         std::lock_guard<std::mutex> lock(mutex_);
         pending_.clear();

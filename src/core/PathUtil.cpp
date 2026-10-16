@@ -22,20 +22,21 @@ const std::vector<std::string> &videoExtensions() {
     return kExts;
 }
 
-std::string videoFileFilter() {
-    return "视频文件(*.mp4 *.m4v *.mkv *.mts *.avi *.mov *.mpg *.flv *.dat *.wmv "
-           "*.rm *.rmvb *.mpeg *.3gp *.mxf *.m4s)";
+std::string videoFilterPattern() {
+    return "*.mp4 *.m4v *.mkv *.mts *.avi *.mov *.mpg *.flv *.dat *.wmv "
+           "*.rm *.rmvb *.mpeg *.3gp *.mxf *.m4s";
 }
 
-std::string audioFileFilter() {
-    return "音频文件(*.aac *.wav *.mp3 *.ac3 *.m4a *.mov *.m4s)";
+std::string audioFilterPattern() {
+    return "*.aac *.wav *.mp3 *.ac3 *.m4a *.mov *.m4s";
 }
 
 const NameValues &scaleFilters() {
+    // 键是规范名（与语言无关）；显示名的本地化在界面层做
     static const NameValues kFilters = {
-        {"原始大小", "scale=trunc(iw/2)*2:trunc(ih/2)*2"},
-        {"一半", "scale=trunc(iw/4)*2:trunc(ih/4)*2"},
-        {"四分之一", "scale=trunc(iw/8)*2:trunc(ih/8)*2"},
+        {"original", "scale=trunc(iw/2)*2:trunc(ih/2)*2"},
+        {"half", "scale=trunc(iw/4)*2:trunc(ih/4)*2"},
+        {"quarter", "scale=trunc(iw/8)*2:trunc(ih/8)*2"},
         {"1920*1080", "scale=1920:1080"},
         {"1280*720", "scale=1280:720"},
     };
@@ -51,14 +52,6 @@ const NameValues &hwEncoders() {
         {"videotoolbox", "h264_videotoolbox"},
     };
     return kEncoders;
-}
-
-std::string hwEncoderRequirement(const std::string &encoderName) {
-    if (encoderName == "h264_nvenc") return "需要 NVIDIA 显卡与驱动";
-    if (encoderName == "h264_qsv") return "需要支持 QSV 的 Intel 核显";
-    if (encoderName == "h264_amf") return "需要 AMD 显卡（AMF）";
-    if (encoderName == "h264_videotoolbox") return "仅 macOS 可用";
-    return {};
 }
 
 const NameValues &softwareEncoders() {
@@ -91,6 +84,18 @@ std::string extensionOf(const std::string &path) {
 
 std::string stemOf(const std::string &path) {
     return fs::path(path).stem().string();
+}
+
+std::string atomicTempPath(const std::string &output) {
+    if (output.empty()) return {};
+    const fs::path p(output);
+    const std::string ext = p.extension().string();
+    fs::path stem = p.stem();
+    stem += L".LRConvert-tmp";
+
+    fs::path result = p.parent_path() / stem;
+    result += ext;  // 后缀原样保留，理由见头文件注释（movflags +faststart）
+    return result.string();
 }
 
 std::string parentOf(const std::string &path) {
@@ -161,6 +166,28 @@ std::string concatListContent(const std::vector<std::string> &files) {
         out += "'\n";
     }
     return out;
+}
+
+bool sameFilePath(const std::string &a, const std::string &b) {
+    if (a.empty() || b.empty()) return false;
+
+    // 真实判定：两个文件都存在时，equivalent() 能识破硬链接/不同写法
+    std::error_code ec;
+    if (fs::exists(a, ec) && fs::exists(b, ec) && fs::equivalent(a, b, ec)) {
+        return true;
+    }
+
+    // 退回字符串比较：规范化（统一分隔符、去掉 ./ ../）后大小写不敏感
+    // （Windows 文件系统不区分大小写）
+    auto normalize = [](const std::string &p) {
+        std::string s = p;
+        std::replace(s.begin(), s.end(), '/', '\\');
+        const fs::path path = fs::path(s).lexically_normal();
+        std::wstring w = path.wstring();
+        for (auto &c : w) c = static_cast<wchar_t>(std::towlower(static_cast<wint_t>(c)));
+        return w;
+    };
+    return normalize(a) == normalize(b);
 }
 
 }  // namespace lr::pathutil

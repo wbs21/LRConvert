@@ -19,6 +19,7 @@
 #include <string>
 #include <vector>
 
+#include "ffmpeg/FfObjects.h"
 #include "ffmpeg/FfmpegApi.h"
 
 namespace lr {
@@ -29,6 +30,10 @@ public:
     ~FrameGrabber();
     FrameGrabber(const FrameGrabber &) = delete;
     FrameGrabber &operator=(const FrameGrabber &) = delete;
+    /// 可移动：导入新文件时在本地对象上开文件 + 取帧，就绪后整体换进
+    /// 共享对象（锁内只做指针交换，见 MainWindow 导入路径与 P2-10）
+    FrameGrabber(FrameGrabber &&other) noexcept;
+    FrameGrabber &operator=(FrameGrabber &&other) noexcept;
 
     struct Frame {
         std::vector<uint8_t> rgb;  // 紧密排列的 RGB24（无行对齐填充）
@@ -99,12 +104,14 @@ private:
     bool skipBrokenRegion();
 
     FfmpegApi *api_ = nullptr;
-    AVFormatContext *fmt_ = nullptr;
-    AVCodecContext *codec_ = nullptr;
-    AVFrame *frame_ = nullptr;   // 解码输出
-    AVFrame *rgb_ = nullptr;     // 缩放/格式转换输出
-    AVPacket *packet_ = nullptr;
-    SwsContext *sws_ = nullptr;
+    /// libav* 对象全部 RAII 化（P2-11）：出了作用域自动释放，
+    /// 错误分支/异常路径不用再逐个保证调到 release
+    FfInput fmt_;
+    FfCodec codec_;
+    FfFrame frame_;   ///< 解码输出
+    FfFrame rgb_;     ///< 缩放/格式转换输出
+    FfPacket packet_;
+    FfSws sws_;
     int videoIdx_ = -1;
     bool frameHeld_ = false;  // decodeNext() 之后有没有一帧等着被取走
     double heldSec_ = 0.0;    // 那一帧的时间

@@ -25,11 +25,11 @@
 #include <memory>
 #include <mutex>
 #include <string>
-#include <thread>
 #include <vector>
 
 #include "ffmpeg/AudioPeaks.h"
 #include "ffmpeg/FfmpegApi.h"
+#include "platform/ThreadUtil.h"
 
 namespace lr {
 
@@ -78,7 +78,8 @@ private:
     std::atomic<bool> running_{false};
     std::atomic<int> doneCount_{0};
     int total_ = 0;
-    std::vector<std::thread> threads_;
+    /// 大栈线程（P2-12：解码链深，默认 1MB 栈不够）＋ 线程名（P1-6）
+    std::vector<lr::platform::BigStackThread> threads_;
 
     ProgressCb progressCb_;
     ErrorCb errorCb_;

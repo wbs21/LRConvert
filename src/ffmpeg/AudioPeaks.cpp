@@ -3,6 +3,9 @@
 
 #include "ffmpeg/AudioPeaks.h"
 
+#include "ffmpeg/FfObjects.h"
+#include "ffmpeg/IoTimeout.h"
+
 #include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
 #include <libswresample/swresample.h>
@@ -28,22 +31,25 @@ int firstAudioStream(AVFormatContext *fmt) {
 /// 解码骨架：把 [fromSec, toSec) 解成 单声道/s16/8kHz，逐块交给 sink。
 /// 建峰值的两种方式（整轨 build / 区间 buildRange / 分段全量 WaveformBuilder）
 /// 都复用这一份，避免把下面这几个坑各写一遍。
+///
+/// libav* 对象全部 RAII 化（P2-11）：原来的版本每个错误分支都要手工配平
+/// 四五次释放，新增资源就是新的泄漏机会。
 bool decodeRangeImpl(FfmpegApi &api, const std::string &path, double fromSec, double toSec,
                      bool seekToStart, const SampleSink &sink, std::string &error) {
-    AVFormatContext *fmt = nullptr;
-    int ret = api.avformat_open_input(&fmt, path.c_str(), nullptr, nullptr);
-    if (ret < 0) {
-        error = api.errorText(ret);
+    std::string openError;
+    FfInput fmt = lr::wrapInput(
+        api, lr::io::openInputWithTimeout(api, path, lr::io::kOpenTimeoutSec, openError));
+    if (!fmt) {
+        error = openError.empty() ? "打开音频文件失败" : openError;
         return false;
     }
 
-    if (api.avformat_find_stream_info(fmt, nullptr) < 0) {
+    if (api.avformat_find_stream_info(fmt.get(), nullptr) < 0) {
         // 不致命
     }
 
-    const int audioIdx = firstAudioStream(fmt);
+    const int audioIdx = firstAudioStream(fmt.get());
     if (audioIdx < 0) {
-        api.avformat_close_input(&fmt);
         error = "没有音轨";
         return false;
     }
@@ -51,51 +57,40 @@ bool decodeRangeImpl(FfmpegApi &api, const std::string &path, double fromSec, do
     AVStream *stream = fmt->streams[audioIdx];
     const AVCodec *codec = api.avcodec_find_decoder(stream->codecpar->codec_id);
     if (codec == nullptr) {
-        api.avformat_close_input(&fmt);
         error = "找不到对应的音频解码器";
         return false;
     }
 
-    AVCodecContext *codecCtx = api.avcodec_alloc_context3(codec);
-    if (codecCtx == nullptr) {
-        api.avformat_close_input(&fmt);
+    FfCodec codecCtx = lr::wrapCodec(api, api.avcodec_alloc_context3(codec));
+    if (!codecCtx) {
         error = "分配解码上下文失败";
         return false;
     }
-    ret = api.avcodec_parameters_to_context(codecCtx, stream->codecpar);
+    int ret = api.avcodec_parameters_to_context(codecCtx.get(), stream->codecpar);
     if (ret < 0) {
         error = api.errorText(ret);
-        api.avcodec_free_context(&codecCtx);
-        api.avformat_close_input(&fmt);
         return false;
     }
-    ret = api.avcodec_open2(codecCtx, codec, nullptr);
+    ret = api.avcodec_open2(codecCtx.get(), codec, nullptr);
     if (ret < 0) {
         error = api.errorText(ret);
-        api.avcodec_free_context(&codecCtx);
-        api.avformat_close_input(&fmt);
         return false;
     }
 
     // 重采样到 单声道 / s16 / 8kHz：后续分桶只读一路 s16，最快
     AVChannelLayout mono;
     api.av_channel_layout_default(&mono, 1);
-    SwrContext *swr = api.swr_alloc();
-    ret = api.swr_alloc_set_opts2(&swr, &mono, AV_SAMPLE_FMT_S16, kOutSampleRate,
+    SwrContext *rawSwr = api.swr_alloc();
+    ret = api.swr_alloc_set_opts2(&rawSwr, &mono, AV_SAMPLE_FMT_S16, kOutSampleRate,
                                   &codecCtx->ch_layout, codecCtx->sample_fmt,
                                   codecCtx->sample_rate, 0, nullptr);
-    if (ret < 0 || swr == nullptr) {
+    FfSwr swr = lr::wrapSwr(api, rawSwr);
+    if (ret < 0 || !swr) {
         error = "创建音频重采样上下文失败";
-        api.swr_free(&swr);
-        api.avcodec_free_context(&codecCtx);
-        api.avformat_close_input(&fmt);
         return false;
     }
-    if (api.swr_init(swr) < 0) {
+    if (api.swr_init(swr.get()) < 0) {
         error = "初始化音频重采样失败";
-        api.swr_free(&swr);
-        api.avcodec_free_context(&codecCtx);
-        api.avformat_close_input(&fmt);
         return false;
     }
 
@@ -106,48 +101,51 @@ bool decodeRangeImpl(FfmpegApi &api, const std::string &path, double fromSec, do
         // 很容易丢掉开头那一段，波形左端就会缺一块
         const double back = std::max(0.0, fromSec - 1.0);
         const int64_t ts = static_cast<int64_t>(std::llround(back / streamSec));
-        api.avformat_seek_file(fmt, audioIdx, INT64_MIN, ts, ts, 0);
+        api.avformat_seek_file(fmt.get(), audioIdx, INT64_MIN, ts, ts, 0);
         // 注意：seek 后必须用 avcodec_flush_buffers 清掉解码器里积压的旧帧。
         // 用"发一个空包"代替会把解码器推进 draining 状态，之后 send_packet
         // 一律返回 AVERROR_EOF，表现就是"怎么都解不出采样"。
-        api.avcodec_flush_buffers(codecCtx);
+        api.avcodec_flush_buffers(codecCtx.get());
     }
 
     uint8_t *buffer = nullptr;
     int linesize = 0;
     if (api.av_samples_alloc(&buffer, &linesize, 1, kBufferSamples, AV_SAMPLE_FMT_S16, 0) < 0) {
         error = "分配采样缓冲失败";
-        api.swr_free(&swr);
-        api.avcodec_free_context(&codecCtx);
-        api.avformat_close_input(&fmt);
         return false;
     }
 
     const double sampleStep = 1.0 / double(kOutSampleRate);
 
-    AVPacket *packet = api.av_packet_alloc();
-    AVFrame *frame = api.av_frame_alloc();
+    FfPacket packet = lr::wrapPacket(api, api.av_packet_alloc());
+    FfFrame frame = lr::wrapFrame(api, api.av_frame_alloc());
     bool stop = false;
     double writeSec = fromSec;   // 下一段待写采样的起始时间
 
-    while (!stop && api.av_read_frame(fmt, packet) >= 0) {
+    for (;;) {
+        if (stop) break;
+        // 读包刹车（P0-4）：见 FrameGrabber::decodeNext 的说明
+        lr::io::armTimeout(lr::io::kReadTimeoutMs);
+        const int readRet = api.av_read_frame(fmt.get(), packet.get());
+        lr::io::disarmTimeout();
+        if (readRet < 0) break;
         if (packet->stream_index != audioIdx) {
-            api.av_packet_unref(packet);
+            api.av_packet_unref(packet.get());
             continue;
         }
-        if (api.avcodec_send_packet(codecCtx, packet) < 0) {
-            api.av_packet_unref(packet);
+        if (api.avcodec_send_packet(codecCtx.get(), packet.get()) < 0) {
+            api.av_packet_unref(packet.get());
             continue;
         }
-        api.av_packet_unref(packet);
+        api.av_packet_unref(packet.get());
 
-        while (api.avcodec_receive_frame(codecCtx, frame) >= 0) {
+        while (api.avcodec_receive_frame(codecCtx.get(), frame.get()) >= 0) {
             // 这一帧的起始时间（重采样后输出样本的时间基准）
             const int64_t pts = (frame->pts != AV_NOPTS_VALUE) ? frame->pts : frame->pkt_dts;
             const double frameSec = (pts != AV_NOPTS_VALUE) ? double(pts) * timeBase : fromSec;
             double posSec = frameSec;
 
-            int produced = api.swr_convert(swr, &buffer, kBufferSamples,
+            int produced = api.swr_convert(swr.get(), &buffer, kBufferSamples,
                                            const_cast<const uint8_t **>(frame->data),
                                            frame->nb_samples);
             while (produced > 0) {
@@ -155,33 +153,28 @@ bool decodeRangeImpl(FfmpegApi &api, const std::string &path, double fromSec, do
                 stop = sink(samples, produced, posSec);
                 posSec += double(produced) * sampleStep;
                 if (stop) break;
-                produced = api.swr_convert(swr, &buffer, kBufferSamples, nullptr, 0);
+                produced = api.swr_convert(swr.get(), &buffer, kBufferSamples, nullptr, 0);
             }
             writeSec = posSec;
-            api.av_frame_unref(frame);
+            api.av_frame_unref(frame.get());
             if (stop) break;
         }
     }
 
     // 冲掉 swr 里剩余的样本（不这么做末尾几片会偏小）
     if (!stop) {
-        int produced = api.swr_convert(swr, &buffer, kBufferSamples, nullptr, 0);
+        int produced = api.swr_convert(swr.get(), &buffer, kBufferSamples, nullptr, 0);
         while (produced > 0) {
             const int16_t *samples = reinterpret_cast<int16_t *>(buffer);
             stop = sink(samples, produced, writeSec);
             writeSec += double(produced) * sampleStep;
             if (stop) break;
-            produced = api.swr_convert(swr, &buffer, kBufferSamples, nullptr, 0);
+            produced = api.swr_convert(swr.get(), &buffer, kBufferSamples, nullptr, 0);
         }
     }
 
     api.av_freep(&buffer);
-    api.av_frame_free(&frame);
-    api.av_packet_free(&packet);
-    api.swr_free(&swr);
-    api.avcodec_free_context(&codecCtx);
-    api.avformat_close_input(&fmt);
-    return true;
+    return true;  // fmt / codecCtx / swr / packet / frame 随 RAII 释放
 }
 
 /// 把解出来的采样投进 out 自己的片里（build / buildRange 用）。
@@ -218,12 +211,15 @@ bool buildWhole(FfmpegApi &api, const std::string &path, double fromSec, double 
 bool AudioPeakBuilder::build(FfmpegApi &api, const std::string &path, double pointsPerSec,
                              AudioPeaks &out, std::string &error) {
     // 先拿时长，决定片数（必须先 find_stream_info，否则很多容器 duration 还是 0）
-    AVFormatContext *fmt = nullptr;
     double duration = 0.0;
-    if (api.avformat_open_input(&fmt, path.c_str(), nullptr, nullptr) >= 0) {
-        api.avformat_find_stream_info(fmt, nullptr);
-        if (fmt->duration > 0) duration = double(fmt->duration) / double(AV_TIME_BASE);
-        api.avformat_close_input(&fmt);
+    {
+        std::string openError;
+        FfInput fmt = lr::wrapInput(
+            api, lr::io::openInputWithTimeout(api, path, lr::io::kOpenTimeoutSec, openError));
+        if (fmt) {
+            api.avformat_find_stream_info(fmt.get(), nullptr);
+            if (fmt->duration > 0) duration = double(fmt->duration) / double(AV_TIME_BASE);
+        }
     }
     if (duration <= 0.0) {
         error = "读不到时长";

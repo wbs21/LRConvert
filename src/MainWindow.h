@@ -15,12 +15,14 @@
 #include <QImage>
 #include <QWidget>
 #include <atomic>
+#include <chrono>
 #include <memory>
+#include <mutex>
 #include <vector>
 
-#include <mutex>
-
 #include "core/ITask.h"
+#include "core/PathUtil.h"
+#include "platform/CrashDump.h"
 #include "ffmpeg/AudioPeaks.h"
 #include "ffmpeg/FrameGrabber.h"
 #include "ffmpeg/MediaProbe.h"
@@ -30,6 +32,7 @@
 #include "ui_mainui.h"
 
 class QCloseEvent;
+class QComboBox;
 class QKeyEvent;
 class QLineEdit;
 class QNetworkAccessManager;
@@ -44,8 +47,17 @@ public:
     explicit MainWindow(QWidget *parent = nullptr);
     ~MainWindow() override;
 
+    /// 崩溃后安全模式（P1-8）：上一次运行留下了 dump 且没走到正常退出。
+    /// 置位后跳过那些"最可能再次把它弄崩"的可选动作（硬件编码器探测），
+    /// 让这一跑至少能正常起来、把用户的活干完。
+    void setSafeMode(bool on) { safeMode_ = on; }
+    bool safeMode() const { return safeMode_; }
+
     /// 冒烟测试用：编码器下拉框当前的可选项（Tab5 与 Tab6 同源，取 Tab5）
     QString smokeEncoderItems() const;
+    /// 冒烟用：切换界面语言并刷新全部动态文本（LRCONVERT_LANG_TEST 驱动，
+    /// 验证"装卸 translator + retranslate + QSettings 记忆"整条链路）
+    bool smokeSwitchLanguage(const QString &id);
     /// 冒烟测试用：把视频导入 Tab1（配合 LRCONVERT_CUT_FILE）
     void smokeLoadCutFile(const QString &path);
     /// 冒烟测试用：Tab1 时间轴当前状态的一行摘要
@@ -67,6 +79,8 @@ public:
     QString smokePlayState() const;
     /// 冒烟用：「提示」标签页（Tab7）正文的前两行，核对文案有没有被改回旧版
     QString smokeTipText() const;
+    /// 冒烟用：Tab7 的「当前版本」一行（retranslate 会重设它，用于核对语言切换）
+    QString smokeVersionLine() const;
     /// 冒烟用：最大化 / 还原（BUG-001 复现用，无需人工点标题栏）
     void smokeSetMaximized(bool on);
     /// 冒烟用：人为把窗口顶出屏幕，验证 keepWindowOnScreen() 能把它拉回来
@@ -133,6 +147,24 @@ private slots:
     void stopTasks();
     void checkVersion();
 
+    // ---- 语言 ----
+    /// 切换语言并刷新所有运行期设置的文本（.ui 静态文本在下次构造时才变，
+    /// 语言切换不重建窗口，所以动态文本全靠这里重设）。
+    /// 返回 false 时 error 给出原因（界面保持原语言不变）。
+    bool switchLanguage(const QString &id, QString *error = nullptr);
+    /// 只刷新动态文本（不动 translator）：switchLanguage 内部用，
+    /// 也是将来"系统语言变化"之类场景的入口
+    void retranslate();
+    /// 分辨率规范键 -> 本地化显示名（"1920*1080" 等数字项原样返回）
+    static QString scaleDisplayName(const QString &key);
+    /// 硬件编码器名 -> 本机要求说明（探测失败时展示）；无关编码器返回空串
+    static QString hwRequirementText(const QString &encoderName);
+    /// 填充分辨率下拉框：显示名本地化，规范键存 userData（见 fillScaleBox）
+    void fillScaleBox(QComboBox *box, const lr::pathutil::NameValues &values);
+    void updateAboutText();    ///< Tab7 正文（T7about）
+    void updateBatchInfoText(); ///< Tab5 的文件数量提示（T5info）
+    void updateVersionLabel();  ///< Tab7 最新版本一行（T7new）
+
     // Tab 1 截取
     void cutFile();
     // Tab 2 连接
@@ -189,6 +221,14 @@ private:
 
     QProgressBar *progressBar_ = nullptr;
     QNetworkAccessManager *net_ = nullptr;
+    /// GUI 心跳定时器（P0-1 看门狗）：事件循环转得动它就一直在打点
+    QTimer *heartbeatTimer_ = nullptr;
+    /// 崩溃后安全模式（P1-8）：上一跑没走到正常退出就结束时由 main() 置位，
+    /// 关掉那些"最可能再次把它弄崩"的可选动作（硬件编码器探测）。
+    bool safeMode_ = false;
+    /// 版本检查结果（版本号；空 = 没查到/查询失败）。文本本地化在
+    /// updateVersionLabel() 里做，切换语言不必重新请求网络
+    QString latestVersion_;
 
     lr::TaskSignals signals_;
     std::vector<std::shared_ptr<lr::ITask>> jobs_;
@@ -204,7 +244,10 @@ private:
     QTimer *previewThrottle_ = nullptr;  ///< 拖动蓝标尺时的取帧节流
     QTimer *assetThrottle_ = nullptr;    ///< 缩放/平移后的缩略图与波形刷新节流
     lr::FrameGrabber cutGrabber_;        ///< 保持文件打开，连续取帧
-    mutable std::mutex cutGrabberMutex_;  ///< mutable：冒烟查询是 const 的，也要能加锁
+    /// mutable：冒烟查询是 const 的，也要能加锁。
+    /// timed_mutex（P2-10）：带上超时之后，取帧任务可以"抢不到就放弃这一拍"，
+    /// 而不是排着队干等 —— 节流性质的任务丢一拍无所谓，界面等锁才要命。
+    mutable std::timed_mutex cutGrabberMutex_;
     QString cutSource_;
     lr::MediaInfo cutInfo_;
     std::vector<double> cutKeyframes_;

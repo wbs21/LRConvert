@@ -3,6 +3,9 @@
 
 #include "ffmpeg/MediaProbe.h"
 
+#include "ffmpeg/FfObjects.h"
+#include "ffmpeg/IoTimeout.h"
+
 // 只有本文件会访问 libav* 结构体字段，因此在这里 include 真正的头文件
 // （其余工程代码只看到 FfmpegSymbols.h 里的前向声明，不会顺手直接调用 av_*）。
 #include <libavcodec/avcodec.h>
@@ -18,15 +21,18 @@ std::string codecName(FfmpegApi &api, AVCodecID id) {
     return codec->name;
 }
 
-/// 打开并读流信息；失败时把错误写进 error 并返回 nullptr
-AVFormatContext *openInput(FfmpegApi &api, const std::string &path, std::string &error) {
-    AVFormatContext *fmt = nullptr;
-    const int ret = api.avformat_open_input(&fmt, path.c_str(), nullptr, nullptr);
-    if (ret < 0) {
-        error = api.errorText(ret);
-        return nullptr;
+/// 打开并读流信息；失败时把错误写进 error 并返回空 FfInput。
+/// 走统一入口：带 I/O 超时（P0-4）+ RAII 接管（P2-11）。
+FfInput openInput(FfmpegApi &api, const std::string &path, std::string &error) {
+    std::string openError;
+    AVFormatContext *raw =
+        lr::io::openInputWithTimeout(api, path, lr::io::kOpenTimeoutSec, openError);
+    if (raw == nullptr) {
+        error = openError;
+        return {};
     }
-    if (api.avformat_find_stream_info(fmt, nullptr) < 0) {
+    FfInput fmt = lr::wrapInput(api, raw);
+    if (api.avformat_find_stream_info(fmt.get(), nullptr) < 0) {
         // 探测流信息失败不算致命（少数容器需要更多数据），继续用已有信息
     }
     return fmt;
@@ -47,15 +53,15 @@ MediaInfo MediaProbe::probe(FfmpegApi &api, const std::string &path) {
     info.path = path;
 
     std::string error;
-    AVFormatContext *fmt = openInput(api, path, error);
-    if (fmt == nullptr) {
+    FfInput fmt = openInput(api, path, error);
+    if (!fmt) {
         info.error = error;
         return info;
     }
 
     if (fmt->duration > 0) info.durationSec = double(fmt->duration) / double(AV_TIME_BASE);
 
-    const int videoIdx = findStream(fmt, AVMEDIA_TYPE_VIDEO);
+    const int videoIdx = findStream(fmt.get(), AVMEDIA_TYPE_VIDEO);
     if (videoIdx >= 0) {
         AVStream *stream = fmt->streams[videoIdx];
         const AVCodecParameters *par = stream->codecpar;
@@ -72,7 +78,7 @@ MediaInfo MediaProbe::probe(FfmpegApi &api, const std::string &path) {
         }
     }
 
-    const int audioIdx = findStream(fmt, AVMEDIA_TYPE_AUDIO);
+    const int audioIdx = findStream(fmt.get(), AVMEDIA_TYPE_AUDIO);
     if (audioIdx >= 0) {
         const AVCodecParameters *par = fmt->streams[audioIdx]->codecpar;
         info.hasAudio = true;
@@ -81,9 +87,8 @@ MediaInfo MediaProbe::probe(FfmpegApi &api, const std::string &path) {
         info.channels = par->ch_layout.nb_channels;
     }
 
-    api.avformat_close_input(&fmt);
     info.valid = info.hasVideo || info.hasAudio;
-    return info;
+    return info;  // fmt 在此随 RAII 关闭
 }
 
 std::vector<double> MediaProbe::keyframeTimes(FfmpegApi &api, const std::string &path,
@@ -91,24 +96,29 @@ std::vector<double> MediaProbe::keyframeTimes(FfmpegApi &api, const std::string 
     std::vector<double> times;
 
     std::string openError;
-    AVFormatContext *fmt = openInput(api, path, openError);
-    if (fmt == nullptr) {
+    FfInput fmt = openInput(api, path, openError);
+    if (!fmt) {
         if (error) *error = openError;
         return times;
     }
 
-    const int videoIdx = findStream(fmt, AVMEDIA_TYPE_VIDEO);
+    const int videoIdx = findStream(fmt.get(), AVMEDIA_TYPE_VIDEO);
     if (videoIdx < 0) {
-        api.avformat_close_input(&fmt);
         if (error) *error = "没有视频流";
         return times;
     }
 
     const double toSec = av_q2d(fmt->streams[videoIdx]->time_base);
-    AVPacket *packet = api.av_packet_alloc();
+    FfPacket packet = lr::wrapPacket(api, api.av_packet_alloc());
     double last = -1e100;  // 关键帧时间戳理论上递增，这里顺手去重/防倒退
 
-    while (api.av_read_frame(fmt, packet) >= 0) {
+    for (;;) {
+        // 读包刹车（P0-4）：见 FrameGrabber::decodeNext 的说明
+        lr::io::armTimeout(lr::io::kReadTimeoutMs);
+        const int ret = api.av_read_frame(fmt.get(), packet.get());
+        lr::io::disarmTimeout();
+        if (ret < 0) break;
+
         if (packet->stream_index == videoIdx && (packet->flags & AV_PKT_FLAG_KEY) != 0) {
             const int64_t ts = (packet->pts != AV_NOPTS_VALUE) ? packet->pts : packet->dts;
             if (ts != AV_NOPTS_VALUE) {
@@ -119,11 +129,8 @@ std::vector<double> MediaProbe::keyframeTimes(FfmpegApi &api, const std::string 
                 }
             }
         }
-        api.av_packet_unref(packet);
+        api.av_packet_unref(packet.get());
     }
-
-    api.av_packet_free(&packet);
-    api.avformat_close_input(&fmt);
     return times;
 }
 

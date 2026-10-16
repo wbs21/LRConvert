@@ -1,141 +1,209 @@
-# LRconvert（小兔子转换器）· C++ 版
+# LRconvert (Little Rabbit Converter) · C++ Edition
 
-FFmpeg 的图形界面：**截取 / 连接 / 分离 / 合并 / 批量压缩 / 自定义压缩**。
+A graphical UI for FFmpeg: **Cut / Join / Split / Merge / Batch Compress / Custom Compress**.
 
-本目录是 **C++20 + Qt6 重写版**。原 Python/PySide6 版本（v3.4）保存在
-[`python/`](python/) 目录，含完整的历史代码与 MIT 许可证。
+This directory is the **C++20 + Qt6 rewrite**. The original Python/PySide6 version
+(v3.4) is preserved in [`python/`](python/) with its full history and MIT license.
 
-## 与 Python 版的区别
+## Differences from the Python version
 
-| | Python 版（python/） | C++ 版（本目录） |
+| | Python version (`python/`) | C++ version (this directory) |
 |---|---|---|
-| FFmpeg 调用方式 | 子进程跑 `ffmpeg.exe`，解析 `-progress pipe:1` 输出 | **进程内运行时加载 libav\* 动态库**，直接调 API |
-| ffmpeg 安装 | 需要用户自行安装并加入 PATH | 不需要， DLL 随程序分发 |
-| 进度 | 解析命令行文本输出 | 编码/拷贝循环内按 pts 直接计算 |
-| 停止 | 先发 `q` 再强杀进程 | 协作式取消：flush 解码器/编码器后正常写文件尾 |
-| 启动速度 | 启动即检测 ffmpeg | **UI 先出首帧，动态库在后台加载**，缺库不阻塞启动 |
-| 界面 | PySide6 + mainui.ui | Qt6 + 同一份 mainui.ui（控件名、交互完全一致） |
+| FFmpeg invocation | Subprocess running `ffmpeg.exe`, parsing `-progress pipe:1` output | **In-process runtime loading of the libav\* DLLs**, direct API calls |
+| ffmpeg installation | User must install it and add it to PATH | Not needed — the DLLs ship with the program |
+| Progress | Parses command-line text output | Computed from pts inside the encode/copy loops |
+| Stopping | Sends `q`, then kills the process | Cooperative cancel: flush decoders/encoders, then write the trailer |
+| Startup | ffmpeg detected at startup | **UI shows its first frame immediately; libraries load in the background** — missing libraries never block startup |
+| Interface | PySide6 + mainui.ui | Qt6 + the same mainui.ui (identical widget names and interactions) |
 
-六大功能的行为（输入输出、命名规则 `原名_new_时间戳.后缀`、冲突追加 `(1)`）
-与原版保持一致，老用户零学习成本。
+The behavior of all six features (inputs/outputs, the `name_new_timestamp.ext`
+naming rule, `(1)` conflict suffixes) matches the original, so existing users
+need zero re-learning.
 
-## 构建
+## Language
 
-依赖：
+The interface is available in **English (default)** and **中文**. Switch anytime
+from the dropdown at the top right of the **About** tab — the change applies
+immediately and is remembered across restarts.
 
-- **Qt 6**（MinGW 版，≥ 6.5；MSVC 版与 FFmpeg 的 MinGW-w64 构建 ABI 不兼容，不能混用）
+Source strings in the code are Chinese; the English translation lives in
+[`translations/`](translations/) as a Qt `.ts`/`.qm` pair (built into the exe, and
+overridable by a `translations/` folder next to the exe). To add a language, see
+[`translations/README.md`](translations/README.md).
+
+## Building
+
+Requirements:
+
+- **Qt 6** (MinGW build, ≥ 6.5; the MSVC build is ABI-incompatible with the
+  MinGW-w64 FFmpeg build and must not be mixed)
 - **CMake** ≥ 3.20
-- 编译器：**Qt 自带的 MinGW**（`Qt/Tools/mingw1310_64`，GCC 13.1）。
-  不要用系统里更新的 g++——Qt 官方包由 GCC 13.1 构建，混用大版本不同的
-  libstdc++ 容易运行时出错。
+- Compiler: **the MinGW shipped with Qt** (`Qt/Tools/mingw1310_64`, GCC 13.1).
+  Do not use a newer system g++ — the official Qt packages are built with
+  GCC 13.1, and mixing libstdc++ across major versions tends to crash at runtime.
 
 ```bash
-./scripts/build.sh          # Release 构建
-./scripts/build.sh clean    # 清掉 build/ 重新配置
+./scripts/build.sh          # Release build
+./scripts/build.sh clean    # Wipe build/ and reconfigure
+./scripts/build.sh asan     # ASan + UBSan test build (for the fuzz suite)
 ```
 
-FFmpeg 头文件在仓库内的 [`vendor/ffmpeg/include/`](vendor/ffmpeg/include/)，构建直接用它。
-29 个运行时 DLL（74.6 MB，挑选依据见 [`vendor/ffmpeg/README.md`](vendor/ffmpeg/README.md)）
-**不在仓库里**（体积原因，已 gitignore），两种获取方式：
+FFmpeg headers live in the repo at [`vendor/ffmpeg/include/`](vendor/ffmpeg/include/)
+and are used directly for building. The 29 runtime DLLs (74.6 MB; selection
+rationale in [`vendor/ffmpeg/README.md`](vendor/ffmpeg/README.md)) are **not** in
+the repo (size reasons, gitignored). Two ways to get them:
 
-- 从 [GitHub Release](../../releases) 的发布包里取（解压后 `ffmpeg/` 子目录即是）；
-- 或者设环境变量 `LRCONVERT_FFMPEG_DIR` 指向你自己的 FFmpeg DLL 目录。
+- From the [GitHub Release](../../releases) package (the `ffmpeg/` subdirectory
+  after extraction);
+- Or set the environment variable `LRCONVERT_FFMPEG_DIR` to your own FFmpeg DLL
+  directory.
 
-构建本身只需要 `include/`，DLL 缺失不影响编译；`scripts/package.sh` 会在打包时
-自动把 `vendor/ffmpeg/bin/` 的内容复制进发布目录。
+Building only needs `include/`; missing DLLs do not affect compilation.
+`scripts/package.sh` copies `vendor/ffmpeg/bin/` into the release directory when
+packaging.
 
-> 工程**不链接** libav\*——符号在运行时由 `src/ffmpeg/FfmpegApi` 解析，
-> 这样 DLL 不会写进 PE 导入表，进程启动时不会预加载它们。详见
-> [`docs/LRConvert_Cpp_Qt_重构方案.md`](docs/LRConvert_Cpp_Qt_重构方案.md) §6。
+> The project **does not link** libav\* — symbols are resolved at runtime by
+> `src/ffmpeg/FfmpegApi`, so the DLLs never enter the PE import table and are not
+> preloaded at process start. See
+> [`docs/LRConvert_Cpp_Qt_重构方案.md`](docs/LRConvert_Cpp_Qt_重构方案.md) §6.
 
-## 运行
+## Running
 
 ```bash
 ./scripts/run.sh
 ```
 
-FFmpeg 动态库按以下顺序查找（`src/ffmpeg/FfmpegApi.cpp`）：
+FFmpeg DLLs are looked up in this order (`src/ffmpeg/FfmpegApi.cpp`):
 
-1. 环境变量 `LRCONVERT_FFMPEG_DIR` 指定的目录；
-2. exe 同级的 `ffmpeg/` 子目录（构建与打包脚本的默认布局）；
-3. exe 所在目录本身。
+1. The directory named by the `LRCONVERT_FFMPEG_DIR` environment variable;
+2. The `ffmpeg/` subdirectory next to the exe (the default layout of the build
+   and package scripts);
+3. The exe's own directory.
 
-> ⚠️ **不要把 FFmpeg 的 DLL 放到 exe 同级目录**。完整构建会附带
-> `zlib1.dll` / `libstdc++-6.dll` / `libbz2-1.dll` 等通用运行时库，
-> 它们会优先命中 Qt 自身的同名依赖（exe 目录搜索优先级最高），
-> 版本对不上会让进程直接启动失败（退出码 127，无任何提示）。
-> 放 `ffmpeg/` 子目录即可物理隔离。
+> ⚠️ **Do not put the FFmpeg DLLs next to the exe.** A full build ships
+> `zlib1.dll` / `libstdc++-6.dll` / `libbz2-1.dll` and other common runtime
+> libraries. Once they sit next to the exe, Windows' loader resolves **Qt's own
+> dependencies** against them first (the exe directory has the highest search
+> priority), and a version mismatch kills the process at startup (exit code 127,
+> with no error message at all).
+> The `ffmpeg/` subdirectory keeps them physically isolated.
 
-## 无界面验证工具
+## Headless verification tools
 
-不走 GUI、直接复用任务层代码路径，便于回归和 CI：
+These bypass the GUI but reuse the exact task-layer code paths, for regression
+and CI:
 
 ```bash
-./build/capability_check.exe                        # 引擎能力清单（不依赖 Qt）
-./build/remux_check.exe cut    <输入> <输出> <起始秒> <结束秒>
-./build/remux_check.exe video  <输入> <输出>        # 只留视频轨
-./build/remux_check.exe audio  <输入> <输出>        # 只留音频轨
-./build/remux_check.exe merge  <视频> <音频> <输出>
-./build/remux_check.exe concat <输出> <输入1> <输入2> ...
-./build/transcode_check.exe  <输入> <输出> [编码器] [视频kbps] [缩放] [音频kbps]
+./build/capability_check.exe                        # Engine capability list (no Qt dependency)
+./build/remux_check.exe cut    <input> <output> <start-sec> <end-sec>
+./build/remux_check.exe video  <input> <output>        # Video track only
+./build/remux_check.exe audio  <input> <output>        # Audio track only
+./build/remux_check.exe merge  <video> <audio> <output>
+./build/remux_check.exe concat <output> <input1> <input2> ...
+./build/transcode_check.exe  <input> <output> [encoder] [video-kbps] [scale] [audio-kbps]
 ```
 
-一键全功能回归（与 ffmpeg CLI 同参数输出逐项对比）：
+One-command full regression (item-by-item comparison against ffmpeg CLI output
+with identical parameters):
 
 ```bash
 ./scripts/regression.sh
 ```
 
-## 打包分发
+Damage fuzzing — mutates one healthy clip into a corpus (truncation, bit flips,
+`0xFF` fill, moov scrambling, empty file, …) and runs every entry point against
+each variant with a hard timeout. It asserts only three things: **no crash**,
+**no hang**, and **no leftover temp file** (the atomic-write guarantee):
 
 ```bash
-./scripts/package.sh        # 构建 + windeployqt + FFmpeg DLL
+./scripts/fuzz_corpus.sh                    # Release build
+./scripts/build.sh asan && ASAN_BUILD=build-asan ./scripts/fuzz_corpus.sh
 ```
 
-产物（版本号从 `src/core/Version.h` 读取，单一来源）：
+## Diagnostics
 
-- `dist/LRConvert-<版本>/` —— 完整发布目录（exe、Qt 运行时、`ffmpeg/` 子目录、README、LICENSE）
-- `dist/LRConvert-<版本>-win64.zip` —— 上一项的压缩包，解压即用
+Both crash and freeze end up in the same place, `logs/crashdumps/`:
 
-打包末尾会在无 Qt 开发环境的干净 PATH 下自动冒烟验证自包含性。
-
-> **发布目录里的 Qt DLL 不能移到子文件夹。** 它们写在 exe 的 PE 导入表里，
-> 由 Windows 加载器在 `main()` 之前按「exe 目录 → 系统目录 → PATH」解析，
-> 子文件夹不在搜索范围——移走会让程序直接无法启动（退出码 127，无提示）。
-> FFmpeg 的 DLL 是个例外：它们放在 `ffmpeg/` 子目录，因为程序是用绝对路径
-> 运行时加载它们的，不进导入表。
-
-## 已知限制
-
-- 截取/连接是流拷贝，从最近关键帧开始，起点可能略早于设定时间（与原版一致）。
-- 连接要求各段编码参数一致（与原版一致，README 原有提示）。
-- **硬件编码器启动后自动识别**：批量压缩（Tab5）与自定义压缩（Tab6）的编码器
-  下拉框启动时只含软件编码器 libx264，后台探测确认本机可用（有对应显卡）的
-  硬件项才会加入；不支持的项从不出现，日志区有原因说明。万一选中后仍打开
-  失败，任务会自动回退 libx264。
-- 截取边界与 ffmpeg CLI 存在约 2 帧（66ms）差异：CLI 按 dts 收尾，
-  B 帧内容下会多带少量帧；本实现按 pts 收尾，输出是精确的 `[起始, 结束)` 区间。
-  详见 docs/ 回归方案 §9.8。
-
-## 许可证
-
-- C++ 版：**GPL-3.0**（见 [LICENSE](LICENSE)）。
-  原因是它在进程内运行时链接 `libavcodec` / `libavformat` 等库，
-  而本项目配套的 FFmpeg 是 `9.0.2-gplfull` 构建（含 libx264、libx265 等 GPL 组件），
-  按 GPL 的条款本程序属于其衍生作品。
-  注意：运行时 `LoadLibrary` 动态加载同样构成链接，不因为是"延迟加载"而豁免。
-- Python 原版：MIT（见 [python/LICENSE](python/LICENSE)）。
-  它只是以子进程方式调用 `ffmpeg.exe`，通过命令行参数与标准输出通信，
-  属于独立程序聚合，因此不受 GPL 传染。
-
-### GPL-3 要求的源码提供
-
-本程序以 GPL-3.0 发布，分发二进制时须同时提供完整源码。源码在此仓库本分支：
-
-```
-https://github.com/wbs21/LRConvert          （根目录即 C++ 版源码，src/ 下）
+```bash
+LRCONVERT_CRASH_TEST=1 ./scripts/run.sh     # Deliberate access violation → .dmp
 ```
 
-仓库不含 29 个 FFmpeg 运行时 DLL（74.6 MB，体积原因），
-它们同样遵循 GPL-3，可在 [GitHub Releases](../../releases) 的发布包里取得，
-发布包内 `ffmpeg/` 子目录即是。
+- Catches SEH exceptions, `std::terminate`, `abort()`/CRT handlers, and **hangs**
+  (a watchdog writes a dump when a heartbeat goes missing for 15 s);
+- Registers a system-level WER LocalDumps fallback at startup, for deaths our own
+  filter cannot catch;
+- After an unclean exit, the next launch **starts in safe mode** (hardware encoder
+  detection skipped) so the app still comes up and gets the job done.
+
+## Packaging
+
+```bash
+./scripts/package.sh        # Build + windeployqt + FFmpeg DLLs
+```
+
+Artifacts (version read from `src/core/Version.h`, the single source of truth):
+
+- `dist/LRConvert-<version>/` — Full release directory (exe, Qt runtime,
+  `ffmpeg/` subdirectory, README, LICENSE, `translations/`)
+- `dist/LRConvert-<version>-win64.zip` — The above, zipped; unzip and run
+- `dist/LRConvert-<version>-ffmpeg-dll-win64.zip` — FFmpeg DLLs only
+
+The packaging script finishes with a self-containment smoke test under a clean
+PATH without any Qt development environment.
+
+> **The Qt DLLs in the release directory cannot be moved into a subfolder.**
+> They are written into the exe's PE import table and resolved by the Windows
+> loader before `main()` runs, searching `exe directory → system directories →
+> PATH`; subfolders are not in the search path — moving them makes the program
+> fail to start (exit code 127, no message).
+> The FFmpeg DLLs are the exception: they live in the `ffmpeg/` subdirectory
+> because the program loads them at runtime by absolute path, never entering
+> the import table.
+
+## Known limitations
+
+- Cut/Join are stream copies that start at the nearest keyframe, so the start
+  may be slightly earlier than the requested time (same as the original).
+- Join requires identical encoding parameters across segments (same as the
+  original, per its README).
+- **Hardware encoders are detected at startup**: the encoder dropdowns on Batch
+  Compress (Tab5) and Custom Compress (Tab6) start with the software encoder
+  libx264 only; hardware options appear after the background probe confirms
+  they are available on this machine (i.e. the matching GPU exists).
+  Unsupported options never show up, and the log explains why. If a selected
+  hardware encoder still fails to open, the task falls back to libx264
+  automatically.
+- Cut boundaries differ from the ffmpeg CLI by about 2 frames (66 ms): the CLI
+  finishes by dts and carries a few extra frames under B-frame reordering; this
+  implementation finishes by pts, so the output is exactly the `[start, end)`
+  interval. See docs/ regression plan §9.8.
+
+## Changelog
+
+Release history: [CHANGELOG.md](CHANGELOG.md).
+
+## License
+
+- C++ version: **GPL-3.0** (see [LICENSE](LICENSE)).
+  It links `libavcodec` / `libavformat` etc. in-process at runtime, and the
+  bundled FFmpeg is a `9.0.2-gplfull` build (including libx264, libx265 and
+  other GPL components), so under the GPL this program is a derivative work.
+  Note: runtime `LoadLibrary` linking counts as linking; "delayed loading" is
+  not an exemption.
+- Python original: MIT (see [python/LICENSE](python/LICENSE)).
+  It only invokes `ffmpeg.exe` as a subprocess, communicating through
+  command-line arguments and standard output — mere aggregation of independent
+  programs, so the GPL does not propagate to it.
+
+### Source-code offer required by GPL-3
+
+This program is released under GPL-3.0; distributing binaries requires offering
+the complete corresponding source. The source is in this repository branch:
+
+```
+https://github.com/wbs21/LRConvert          (the C++ version is at the root, under src/)
+```
+
+The repo does not contain the 29 FFmpeg runtime DLLs (74.6 MB, size reasons).
+They are likewise GPL-3 and can be obtained from the
+[GitHub Releases](../../releases) packages — the `ffmpeg/` subdirectory inside.

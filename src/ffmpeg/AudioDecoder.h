@@ -19,6 +19,7 @@
 #include <string>
 #include <vector>
 
+#include "ffmpeg/FfObjects.h"
 #include "ffmpeg/FfmpegApi.h"
 
 namespace lr {
@@ -63,11 +64,12 @@ private:
     void release();
 
     FfmpegApi *api_ = nullptr;
-    AVFormatContext *fmt_ = nullptr;
-    AVCodecContext *codec_ = nullptr;
-    AVFrame *frame_ = nullptr;
-    AVPacket *packet_ = nullptr;
-    SwrContext *swr_ = nullptr;
+    /// libav* 对象 RAII 化（P2-11）
+    FfInput fmt_;
+    FfCodec codec_;
+    FfFrame frame_;
+    FfPacket packet_;
+    FfSwr swr_;
     uint8_t *buffer_ = nullptr;   // swr 的输出缓冲（s16 交错）
     int bufferSamples_ = 0;       // 缓冲能装多少个"帧"（一帧 = kOutChannels 个 s16）
     int audioIdx_ = -1;

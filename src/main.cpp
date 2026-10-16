@@ -15,20 +15,27 @@
 
 #include <QApplication>
 #include <QDateTime>
+#include <QDesktopServices>
 #include <QDir>
 #include <QFileInfo>
 #include <QIcon>
 #include <QMessageBox>
+#include <QPushButton>
 #include <QStandardPaths>
 #include <QTimer>
+#include <QUrl>
 
+#include <chrono>
 #include <cstdio>
 #include <exception>
+#include <thread>
 
 #include "MainWindow.h"
+#include "core/I18n.h"
 #include "core/Version.h"
 #include "ffmpeg/FfmpegApi.h"
 #include "platform/CrashDump.h"
+#include "platform/ThreadUtil.h"
 
 namespace {
 
@@ -86,6 +93,10 @@ void messageHandler(QtMsgType type, const QMessageLogContext &, const QString &m
 }  // namespace
 
 int main(int argc, char *argv[]) {
+    // 线程命名（P1-6）：dump 里看线程列表时，主线程不能只是一串数字。
+    // 越早越好 —— 这条线程后面所有东西都挂在这里跑。
+    lr::platform::setThreadName("LRConvert/GUI");
+
     QApplication app(argc, argv);
     app.setApplicationName(QStringLiteral("LRconvert"));
     // 全局图标：MainWindow 自己也会 setWindowIcon，这里再设一次是为了
@@ -105,16 +116,31 @@ int main(int argc, char *argv[]) {
     qInfo().noquote() << QStringLiteral("════ LRConvert %1 启动 ════")
                              .arg(QString::fromUtf8(lr::kAppVersion));
 
+    // ---------- 崩溃转储 + 上一次退役方式判定 ----------
+    //
     // 崩溃转储：必须尽早装，而且要装在干任何正事之前。
     //
     // 访问违规、栈溢出、堆损坏这类错误不走 C++ 异常 —— 线程里的 try-catch
     // 和下面 app.exec() 的 catch(...) 全都拦不住，进程会被系统直接杀掉，
     // 日志里连最后一行都留不下。装了这个之后，进程死之前会先把现场写成
     // .dmp，事后打开就能看到崩在哪一行。
+    QString dumpDirPath;
+    bool crashedLastTime = false;
+    QString lastDumpPathText;
     {
         const QDir logDir = QFileInfo(logPath).dir();
         const QString dumpDir = logDir.filePath(QStringLiteral("crashdumps"));
+        dumpDirPath = dumpDir;
         QDir().mkpath(dumpDir);
+
+        // 先问"上次是不是崩了"（读完答复再装处理器 —— 装完就会开始写
+        // 干净退出标记，顺序反了就永远检测不到上一次的崩溃了）
+        std::wstring lastDump;
+        crashedLastTime = lr::platform::hadAbnormalExit(dumpDir.toStdWString(), &lastDump);
+        if (crashedLastTime && !lastDump.empty()) {
+            lastDumpPathText = QString::fromWCharArray(lastDump.c_str());
+        }
+
         lr::platform::installCrashHandler(dumpDir.toStdWString(), [](const char *text) {
             // 崩溃时 Qt 可能已经不好用了，但 qCritical 只是走 messageHandler
             // 里的 fwrite + fflush，够朴素、也够可靠
@@ -134,7 +160,64 @@ int main(int argc, char *argv[]) {
         qWarning().noquote() << tag << QString::fromUtf8(msg);
     });
 
+    // 语言：默认英文，记忆的选择在 QSettings（wbs21/LRConvert → language）。
+    // 必须装在构造任何窗口之前——setupUi 那一刻就要拿到翻译，
+    // 否则首帧会是中文、之后也不会自动刷新。
+    {
+        QString langError;
+        if (!lr::i18n::applySaved(&langError)) {
+            qWarning().noquote()
+                << QStringLiteral("语言加载失败（界面保持源码语言）：") << langError;
+        }
+    }
+
     MainWindow window;
+
+    // 崩溃后安全模式（P1-8）：上一跑没走到正常退出就结束，说明崩过一次。
+    //
+    // 这一跑就把"最可能再崩一次"的那件事省掉（硬件编码器探测 —— 它要去
+    // 打开各家的驱动动态库，是整条链路上环境差异最大、最不稳的一段），
+    // 让程序至少能顺顺当当起来、把用户的活干完。
+    // 干净地退出一次之后，标记刷新，下一次就自动回到完整模式。
+    if (crashedLastTime) {
+        window.setSafeMode(true);
+        qWarning().noquote()
+            << QStringLiteral("[P1-8] 检测到上一次运行异常结束，本次进入安全模式。")
+            << (lastDumpPathText.isEmpty() ? QStringLiteral("（无转储文件）")
+                                           : QStringLiteral("转储：") + lastDumpPathText);
+
+        // 告诉用户一声，别让"下拉框里少了几个硬件编码器"变成一个谜。
+        // 冒烟/自检（对环境有要求、无人值守）时不弹窗 —— 那种场合只看日志。
+        const bool unattended =
+            qEnvironmentVariableIsSet("LRCONVERT_SMOKE_TEST") ||
+            qEnvironmentVariableIsSet("LRCONVERT_CRASH_TEST") ||
+            qEnvironmentVariableIsSet("LRCONVERT_DAMAGE_TEST") ||
+            qEnvironmentVariableIsSet("LRCONVERT_LANG_TEST");
+        if (!unattended) {
+            QMessageBox box(QMessageBox::Warning,
+                            QCoreApplication::translate("main", "LRconvert"),
+                            QCoreApplication::translate(
+                                "main",
+                                "上一次运行似乎没有正常结束（留下了崩溃转储文件）。\n\n"
+                                "本次已启用安全模式：跳过硬件编码器识别，"
+                                "其余功能不受影响，转码仍可使用 libx264。\n\n"
+                                "%1")
+                                .arg(lastDumpPathText.isEmpty()
+                                         ? QString()
+                                         : QCoreApplication::translate("main", "转储文件：%1")
+                                               .arg(lastDumpPathText)),
+                            QMessageBox::NoButton, &window);
+            box.addButton(QCoreApplication::translate("main", "知道了"),
+                          QMessageBox::AcceptRole);
+            QPushButton *openDir =
+                box.addButton(QCoreApplication::translate("main", "打开转储目录"),
+                              QMessageBox::ActionRole);
+            box.exec();
+            if (box.clickedButton() == openDir) {
+                QDesktopServices::openUrl(QUrl::fromLocalFile(dumpDirPath));
+            }
+        }
+    }
     window.show();
 
     // 关键：排在首帧绘制之后，再开始加载动态库
@@ -330,6 +413,46 @@ int main(int argc, char *argv[]) {
         }
     }
 
+    // 卡死自检钩子（P0-1 看门狗）：LRCONVERT_WATCHDOG_TEST=1 时把 GUI 线程
+    // 堵住 25 秒 —— 期间事件循环不转、心跳定时器发不出来，看门狗应当在
+    // 15 秒后写一份 dump 下来。"活着但没反应"是崩溃里最难查的一类：进程还在，
+    // 用户只能说一句"点了没反应"，没有日志也没有现场，所以留个一键自检。
+    if (qEnvironmentVariableIsSet("LRCONVERT_WATCHDOG_TEST")) {
+        QTimer::singleShot(1500, &window, []() {
+            qWarning().noquote()
+                << QStringLiteral("[P0-1] 卡死自检：GUI 线程即将停止响应 25 秒…");
+            std::this_thread::sleep_for(std::chrono::milliseconds(25000));
+            qWarning().noquote()
+                << QStringLiteral("[P0-1] 卡死自检：已恢复响应，应已写出一份 dump");
+        });
+    }
+
+    // 语言切换自检钩子：LRCONVERT_LANG_TEST=1 时跑一遍
+    // 「切中文 → 核对界面文本 → 切回英文 → 再核对」，
+    // 验证"装卸 translator + retranslate() + QSettings 记忆"整条链路
+    // （无需人工点下拉框；正常运行时这个环境变量不存在）。
+    // 可与 LRCONVERT_SMOKE_TEST 同时设（冒烟的退出定时器会一并收场），
+    // 也可以单独设——此时 6.5s 自己退出。
+    if (qEnvironmentVariableIsSet("LRCONVERT_LANG_TEST")) {
+        QTimer::singleShot(3000, &window, [&window]() {
+            const bool ok = window.smokeSwitchLanguage(QStringLiteral("zh_CN"));
+            qInfo().noquote() << QStringLiteral("[SMOKE] 切中文：")
+                              << (ok ? QStringLiteral("成功") : QStringLiteral("失败"))
+                              << QStringLiteral(" 提示页=") << window.smokeTipText()
+                              << QStringLiteral(" 版本行=") << window.smokeVersionLine();
+        });
+        QTimer::singleShot(4500, &window, [&window]() {
+            const bool ok = window.smokeSwitchLanguage(QStringLiteral("en"));
+            qInfo().noquote() << QStringLiteral("[SMOKE] 切回英文：")
+                              << (ok ? QStringLiteral("成功") : QStringLiteral("失败"))
+                              << QStringLiteral(" 提示页=") << window.smokeTipText()
+                              << QStringLiteral(" 版本行=") << window.smokeVersionLine();
+        });
+        if (!qEnvironmentVariableIsSet("LRCONVERT_SMOKE_TEST")) {
+            QTimer::singleShot(6000, &app, &QCoreApplication::quit);
+        }
+    }
+
     // 最后一道兜底：事件循环里要是真漏出异常来（Qt 自己不用异常，但
     // std::vector / std::string 的分配失败、第三方库都可能抛），
     // 默认行为是 std::terminate() —— 窗口直接消失，什么都不说。
@@ -340,21 +463,31 @@ int main(int argc, char *argv[]) {
     } catch (const std::exception &e) {
         qCritical().noquote() << QStringLiteral("未捕获异常，程序即将退出：")
                               << QString::fromUtf8(e.what());
-        QMessageBox::critical(nullptr, QStringLiteral("程序异常"),
-                              QStringLiteral("发生了未处理的异常，程序即将退出。\n\n%1\n\n"
-                                             "详细信息已写入日志文件：\n%2")
-                                  .arg(QString::fromUtf8(e.what()), logPath));
+        QMessageBox::critical(
+            nullptr, QCoreApplication::translate("main", "程序异常"),
+            QCoreApplication::translate("main",
+                                        "发生了未处理的异常，程序即将退出。\n\n%1\n\n"
+                                        "详细信息已写入日志文件：\n%2")
+                .arg(QString::fromUtf8(e.what()), logPath));
         rc = 1;
     } catch (...) {
         qCritical().noquote() << QStringLiteral("未捕获的未知异常，程序即将退出");
-        QMessageBox::critical(nullptr, QStringLiteral("程序异常"),
-                              QStringLiteral("发生了未处理的异常，程序即将退出。\n\n"
-                                             "详细信息已写入日志文件：\n%1")
-                                  .arg(logPath));
+        QMessageBox::critical(
+            nullptr, QCoreApplication::translate("main", "程序异常"),
+            QCoreApplication::translate("main",
+                                        "发生了未处理的异常，程序即将退出。\n\n"
+                                        "详细信息已写入日志文件：\n%1")
+                .arg(logPath));
         rc = 1;
     }
 
     qInfo().noquote() << QStringLiteral("════ 正常退出（%1）════").arg(rc);
+
+    // 退出流程：先让看门狗别再盯（否则收尾期间的反初始化会被当成"卡死"，
+    // 莫名其妙多一份 dump），再记录"这一跑是干净退出的"。
+    lr::platform::shutdownDiagnostics();
+    lr::platform::markCleanExit(dumpDirPath.toStdWString());
+
     if (g_logFile != nullptr) {
         std::fclose(g_logFile);
         g_logFile = nullptr;

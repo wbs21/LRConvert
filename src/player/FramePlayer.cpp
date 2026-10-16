@@ -3,6 +3,8 @@
 
 #include "player/FramePlayer.h"
 
+#include "platform/CrashDump.h"
+
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -83,19 +85,28 @@ void FramePlayer::play(double fromSec, double toSec) {
     plcTail_.clear();
     audioBadRun_ = 0;
 
-    thread_ = std::thread([this, fromSec, toSec]() {
-        // ⚠ 这层 try 是保命的：解码、sws 缩放、vector 分配都可能抛异常
-        // （损坏文件、异常分辨率、内存不足），一旦让异常逃出线程函数，
-        // C++ 运行时会直接 std::terminate() —— 整个进程瞬间消失，
-        // 没有日志、没有崩溃对话框。宁可安静地当成"播完了"。
-        try {
-            threadMain(fromSec, toSec);
-        } catch (...) {
-            playing_ = false;
-            stopAudio();
-            if (endCb_ && !silentStop_) endCb_(stats_);
-        }
-    });
+    thread_ = lr::platform::BigStackThread(
+        [this, fromSec, toSec]() {
+            // 看门狗开始盯这条线程（P0-1）：播起来之后每帧打点，
+            // 15 秒不打点就判定卡死并留一份 dump；线程退出（播完/出错/
+            // 异常）时取消盯梢 —— 放在这里而非 stop() 里，覆盖"自己播完"
+            // 那条路径，不会留下"没人跑了还被盯着"的误报窗口
+            lr::platform::setExpected(lr::platform::Heartbeat::Playback, true);
+            lr::platform::heartbeat(lr::platform::Heartbeat::Playback);
+            // ⚠ 这层 try 是保命的：解码、sws 缩放、vector 分配都可能抛异常
+            // （损坏文件、异常分辨率、内存不足），一旦让异常逃出线程函数，
+            // C++ 运行时会直接 std::terminate() —— 整个进程瞬间消失，
+            // 没有日志、没有崩溃对话框。宁可安静地当成"播完了"。
+            try {
+                threadMain(fromSec, toSec);
+            } catch (...) {
+                playing_ = false;
+                stopAudio();
+                if (endCb_ && !silentStop_) endCb_(stats_);
+            }
+            lr::platform::setExpected(lr::platform::Heartbeat::Playback, false);
+        },
+        "LRDecode-Play");  // 线程名（P1-6）：dump 里能一眼看出是播放线程
 }
 
 void FramePlayer::stop() {
@@ -104,6 +115,8 @@ void FramePlayer::stop() {
     if (thread_.joinable()) thread_.join();
     playing_ = false;
     stopAudio();
+    // 双保险：线程入口退出时也会取消盯梢，这里覆盖"线程还没起来就 stop"的路径
+    lr::platform::setExpected(lr::platform::Heartbeat::Playback, false);
 }
 
 // ---------------- 播放线程 ----------------
@@ -140,6 +153,8 @@ void FramePlayer::threadMain(double from, double to) {
     };
 
     while (!stopFlag_) {
+        // 看门狗心跳（P0-1）：播放线程还活着且在推进
+        lr::platform::heartbeat(lr::platform::Heartbeat::Playback);
         lr::FrameGrabber::Frame frame;
         const lr::FrameGrabber::DecodeResult r = video_.grabNext(outW_, outH_, frame, error);
 

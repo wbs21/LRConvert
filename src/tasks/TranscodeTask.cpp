@@ -3,6 +3,9 @@
 
 #include "TranscodeTask.h"
 
+#include "core/PathUtil.h"
+#include "ffmpeg/FfObjects.h"
+#include "ffmpeg/IoTimeout.h"
 #include "ffmpeg/FfmpegApi.h"
 
 extern "C" {
@@ -19,12 +22,14 @@ extern "C" {
 #include <libswscale/swscale.h>
 }
 
+#include <QCoreApplication>
 #include <QDateTime>
 #include <QString>
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <filesystem>
 #include <string>
 #include <vector>
 
@@ -272,23 +277,24 @@ private:
     AVFrame *frame_ = nullptr;
 };
 
-/// UI 下拉框显示名（pathutil::scaleFilters 的键）→ 目标尺寸。
-/// 与 Python 版 SCALE_FILTERS 一一对应。
-void resolveScale(const std::string &display, int srcW, int srcH, int &outW,
+/// 分辨率规范键（pathutil::scaleFilters 的键，与语言无关）-> 目标尺寸。
+/// 与 Python 版 SCALE_FILTERS 一一对应。未知键按"原始大小"处理
+/// （只做偶数对齐）——宁可保守，也不要因为一个陌生值就把画面缩没。
+void resolveScale(const std::string &key, int srcW, int srcH, int &outW,
                   int &outH) {
-    if (display.find("1920") != std::string::npos) {
+    if (key == "1920*1080") {
         outW = 1920;
         outH = 1080;
-    } else if (display.find("1280") != std::string::npos) {
+    } else if (key == "1280*720") {
         outW = 1280;
         outH = 720;
-    } else if (display.find("四") != std::string::npos) {
+    } else if (key == "quarter") {
         outW = evenDown(srcW / 4);
         outH = evenDown(srcH / 4);
-    } else if (display.find("一半") != std::string::npos) {
+    } else if (key == "half") {
         outW = evenDown(srcW / 2);
         outH = evenDown(srcH / 2);
-    } else {  // "原始大小" 及未知项：仅做偶数对齐
+    } else {  // "original" 及未知项：仅做偶数对齐
         outW = evenDown(srcW);
         outH = evenDown(srcH);
     }
@@ -316,16 +322,18 @@ bool TranscodeTask::run(TaskSignals &sig) {
         emit sig.log(text, color);
     };
 
-    AVFormatContext *ic = nullptr;
-    AVFormatContext *oc = nullptr;
-    AVCodecContext *vDec = nullptr;
-    AVCodecContext *vEnc = nullptr;
-    AVCodecContext *aDec = nullptr;
-    AVCodecContext *aEnc = nullptr;
-    AVPacket *pkt = nullptr;
-    AVPacket *outPkt = nullptr;
-    AVFrame *frame = nullptr;
-    Scaler *scaler = nullptr;
+    // libav* 对象全部 RAII 化（P2-11）：出了作用域自动释放，
+    // 异常路径（下面的 try/catch 收敛的那种）不用再逐个补清理
+    lr::FfInput ic;
+    lr::FfOutput oc;
+    lr::FfCodec vDec;
+    lr::FfCodec vEnc;
+    lr::FfCodec aDec;
+    lr::FfCodec aEnc;
+    lr::FfPacket pkt;
+    lr::FfPacket outPkt;
+    lr::FfFrame frame;
+    Scaler *scaler = nullptr;    // 这两个是自带析构的 C++ 包装，保持原样
     Resampler *resampler = nullptr;
     AVStream *vOut = nullptr;
     AVStream *aOut = nullptr;
@@ -339,8 +347,15 @@ bool TranscodeTask::run(TaskSignals &sig) {
     int dstW = 0;
     int dstH = 0;
     bool ok = false;
+    /// 「文件要不要留下」与「任务算不算成功」是两件事：
+    /// 手动停止时两者分叉（任务失败，但已经写好的那半截文件要保留）。
+    bool keepOutput = false;
     bool inputEof = false;
     std::string stopReason;
+    /// 原子落盘（P2-9）：实际写到"输出路径 + .LRConvert-tmp"，完成并关闭后
+    /// 才 rename 到最终路径。崩溃/断电最多留下一个临时文件，最终路径要么
+    /// 完整、要么不存在 —— 不会出现半个坏文件盖掉旧文件的情况。
+    std::string tempPath;
 
     // 下面四个 lambda 必须定义在第一个 goto 之前：它们捕获的变量此刻还是
     // 空值，但因为是按引用捕获，真正用到时（运行时）已经赋好了。
@@ -348,28 +363,28 @@ bool TranscodeTask::run(TaskSignals &sig) {
     /// 把编码好的包取出来写进容器
     auto pumpVideo = [&]() -> bool {
         while (true) {
-            const int r = api.avcodec_receive_packet(vEnc, outPkt);
+            const int r = api.avcodec_receive_packet(vEnc.get(), outPkt.get());
             if (r == AVERROR(EAGAIN) || r == AVERROR_EOF) return true;
             if (r < 0) return false;
             outPkt->stream_index = vOut->index;
-            api.av_packet_rescale_ts(outPkt, rat(vEnc->time_base),
+            api.av_packet_rescale_ts(outPkt.get(), rat(vEnc->time_base),
                                      rat(vOut->time_base));
-            const int w = api.av_interleaved_write_frame(oc, outPkt);
-            api.av_packet_unref(outPkt);
+            const int w = api.av_interleaved_write_frame(oc.get(), outPkt.get());
+            api.av_packet_unref(outPkt.get());
             if (w < 0) return false;
         }
     };
 
     auto pumpAudio = [&]() -> bool {
         while (true) {
-            const int r = api.avcodec_receive_packet(aEnc, outPkt);
+            const int r = api.avcodec_receive_packet(aEnc.get(), outPkt.get());
             if (r == AVERROR(EAGAIN) || r == AVERROR_EOF) return true;
             if (r < 0) return false;
             outPkt->stream_index = aOut->index;
-            api.av_packet_rescale_ts(outPkt, rat(aEnc->time_base),
+            api.av_packet_rescale_ts(outPkt.get(), rat(aEnc->time_base),
                                      rat(aOut->time_base));
-            const int w = api.av_interleaved_write_frame(oc, outPkt);
-            api.av_packet_unref(outPkt);
+            const int w = api.av_interleaved_write_frame(oc.get(), outPkt.get());
+            api.av_packet_unref(outPkt.get());
             if (w < 0) return false;
         }
     };
@@ -377,7 +392,7 @@ bool TranscodeTask::run(TaskSignals &sig) {
     /// 把视频解码器里已经就绪的帧全部取出、缩放、送去编码
     auto drainVideo = [&]() -> bool {
         while (true) {
-            const int r = api.avcodec_receive_frame(vDec, frame);
+            const int r = api.avcodec_receive_frame(vDec.get(), frame.get());
             if (r == AVERROR(EAGAIN) || r == AVERROR_EOF) return true;
             if (r < 0) {
                 stopReason = "视频解码失败：" + api.errorText(r);
@@ -389,7 +404,7 @@ bool TranscodeTask::run(TaskSignals &sig) {
                 const int64_t us = toUs(api, inTb, srcPts);
                 if (us > doneUs) doneUs = us;
             }
-            AVFrame *dst = scaler->convert(frame, dstW, dstH);
+            AVFrame *dst = scaler->convert(frame.get(), dstW, dstH);
             if (!dst) {
                 stopReason = "画面缩放失败";
                 return false;
@@ -400,37 +415,37 @@ bool TranscodeTask::run(TaskSignals &sig) {
                            ? api.av_rescale_q(srcPts, rat(inTb),
                                               rat(vEnc->time_base))
                            : vAutoPts++;
-            const int s = api.avcodec_send_frame(vEnc, dst);
+            const int s = api.avcodec_send_frame(vEnc.get(), dst);
             if (s < 0 || !pumpVideo()) {
                 stopReason = "视频编码失败";
                 return false;
             }
-            api.av_frame_unref(frame);
+            api.av_frame_unref(frame.get());
         }
     };
 
     /// 把音频解码器里已经就绪的帧全部取出、重采样、按帧喂给 AAC 编码器
     auto drainAudio = [&]() -> bool {
         while (true) {
-            const int r = api.avcodec_receive_frame(aDec, frame);
+            const int r = api.avcodec_receive_frame(aDec.get(), frame.get());
             if (r == AVERROR(EAGAIN) || r == AVERROR_EOF) return true;
             if (r < 0) {
                 stopReason = "音频解码失败：" + api.errorText(r);
                 return false;
             }
             std::string err;
-            if (!resampler->push(frame, err)) {
+            if (!resampler->push(frame.get(), err)) {
                 stopReason = err;
                 return false;
             }
-            api.av_frame_unref(frame);
+            api.av_frame_unref(frame.get());
 
             while (AVFrame *af = resampler->take(audioFrameSize)) {
                 af->pts = api.av_rescale_q(
                     aOutSamples, FfRational{1, resampler->sampleRate()},
                     rat(aEnc->time_base));
                 aOutSamples += audioFrameSize;
-                const int s = api.avcodec_send_frame(aEnc, af);
+                const int s = api.avcodec_send_frame(aEnc.get(), af);
                 if (s < 0 || !pumpAudio()) {
                     stopReason = "音频编码失败";
                     return false;
@@ -440,25 +455,48 @@ bool TranscodeTask::run(TaskSignals &sig) {
         }
     };
 
+    // ---- 以下主体整体包在 try 里（P2-9）----
+    // 任务线程是 std::thread 语义：异常逃出 = std::terminate = 进程秒死。
+    // 收敛成"该任务失败"，让批处理决定继续还是中止。goto done 会跳出本
+    // try 块（合法：向外跳，块内对象的析构照常执行），最终收尾在 done:。
+    try {
+
     if (!api.isLoaded()) {
-        say(QStringLiteral("✗ FFmpeg 动态库尚未加载完成，无法编码。"),
+        say(QCoreApplication::translate("lr::TranscodeTask", "✗ FFmpeg 动态库尚未加载完成，无法编码。"),
             lr::logcolor::kError);
         return false;
     }
 
-    say(QStringLiteral("▶ 开始编码：%1").arg(QString::fromStdString(spec_.title)),
+    say(QCoreApplication::translate("lr::TranscodeTask", "▶ 开始编码：%1").arg(QString::fromStdString(spec_.title)),
         lr::logcolor::kStep);
 
-    // ---------- 1. 打开输入、找出视频/音频轨 ----------
-    int ret = api.avformat_open_input(&ic, spec_.input.c_str(), nullptr, nullptr);
-    if (ret < 0) {
-        say(QStringLiteral("✗ 无法打开输入文件：%1").arg(api.errorText(ret)),
+    // 输入与输出同一个文件直接拒绝：原子落盘也救不回来（rename 目标正被
+    // 输入句柄占着），而且会把用户的源文件覆盖掉
+    if (lr::pathutil::sameFilePath(spec_.input, spec_.output)) {
+        say(QCoreApplication::translate("lr::TranscodeTask", "✗ 输出文件不能与输入文件相同。"),
             lr::logcolor::kError);
-        goto done;
+        return false;
     }
-    ret = api.avformat_find_stream_info(ic, nullptr);
+
+    int ret = 0;
+
+    // ---------- 1. 打开输入、找出视频/音频轨 ----------
+    // 统一入口：带 I/O 超时（P0-4）
+    {
+        std::string openError;
+        AVFormatContext *raw =
+            lr::io::openInputWithTimeout(api, spec_.input, lr::io::kOpenTimeoutSec, openError);
+        if (raw == nullptr) {
+            say(QCoreApplication::translate("lr::TranscodeTask", "✗ 无法打开输入文件：%1")
+                    .arg(QString::fromStdString(openError)),
+                lr::logcolor::kError);
+            return false;
+        }
+        ic = lr::wrapInput(api, raw);
+    }
+    ret = api.avformat_find_stream_info(ic.get(), nullptr);
     if (ret < 0) {
-        say(QStringLiteral("✗ 无法读取媒体信息：%1").arg(api.errorText(ret)),
+        say(QCoreApplication::translate("lr::TranscodeTask", "✗ 无法读取媒体信息：%1").arg(api.errorText(ret)),
             lr::logcolor::kError);
         goto done;
     }
@@ -472,27 +510,35 @@ bool TranscodeTask::run(TaskSignals &sig) {
         }
     }
     if (vIdx < 0) {
-        say(QStringLiteral("✗ 输入文件里没有视频轨，无法进行编码。"),
+        say(QCoreApplication::translate("lr::TranscodeTask", "✗ 输入文件里没有视频轨，无法进行编码。"),
             lr::logcolor::kError);
         goto done;
     }
     totalUs = toUs(api, AV_TIME_BASE_Q, ic->duration);
 
     // ---------- 2. 打开输出容器 ----------
-    ret = api.avformat_alloc_output_context2(&oc, nullptr, nullptr,
-                                             spec_.output.c_str());
-    if (ret < 0 || !oc) {
-        say(QStringLiteral("✗ 无法根据扩展名创建输出文件（建议使用 .mp4）：%1")
+    // 临时路径一开始就定下来：后缀必须保留原样（pathutil::atomicTempPath 有说明），
+    // 所以这里拿它去创建容器 —— 之后 movflags +faststart 在写尾时重新打开的
+    // 也是这个临时文件，而不是还没影儿的最终文件。
+    {
+        tempPath = lr::pathutil::atomicTempPath(spec_.output);
+        AVFormatContext *rawOc = nullptr;
+        ret = api.avformat_alloc_output_context2(&rawOc, nullptr, nullptr,
+                                                 tempPath.c_str());
+        oc = lr::wrapOutput(api, rawOc);
+    }
+    if (!oc) {
+        say(QCoreApplication::translate("lr::TranscodeTask", "✗ 无法根据扩展名创建输出文件（建议使用 .mp4）：%1")
                 .arg(api.errorText(ret)),
             lr::logcolor::kError);
         goto done;
     }
 
-    pkt = api.av_packet_alloc();
-    outPkt = api.av_packet_alloc();
-    frame = api.av_frame_alloc();
+    pkt.reset(api.av_packet_alloc());
+    outPkt.reset(api.av_packet_alloc());
+    frame.reset(api.av_frame_alloc());
     if (!pkt || !outPkt || !frame) {
-        say(QStringLiteral("✗ 内存分配失败"), lr::logcolor::kError);
+        say(QCoreApplication::translate("lr::TranscodeTask", "✗ 内存分配失败"), lr::logcolor::kError);
         goto done;
     }
 
@@ -501,20 +547,20 @@ bool TranscodeTask::run(TaskSignals &sig) {
         AVStream *in = ic->streams[vIdx];
         const AVCodec *dec = api.avcodec_find_decoder(in->codecpar->codec_id);
         if (!dec) {
-            say(QStringLiteral("✗ 找不到视频解码器（这份 FFmpeg 的解码能力不足）"),
+            say(QCoreApplication::translate("lr::TranscodeTask", "✗ 找不到视频解码器（这份 FFmpeg 的解码能力不足）"),
                 lr::logcolor::kError);
             goto done;
         }
-        vDec = api.avcodec_alloc_context3(dec);
-        if (!vDec || api.avcodec_parameters_to_context(vDec, in->codecpar) < 0 ||
-            api.avcodec_open2(vDec, dec, nullptr) < 0) {
-            say(QStringLiteral("✗ 无法打开视频解码器"), lr::logcolor::kError);
+        vDec.reset(api.avcodec_alloc_context3(dec));
+        if (!vDec || api.avcodec_parameters_to_context(vDec.get(), in->codecpar) < 0 ||
+            api.avcodec_open2(vDec.get(), dec, nullptr) < 0) {
+            say(QCoreApplication::translate("lr::TranscodeTask", "✗ 无法打开视频解码器"), lr::logcolor::kError);
             goto done;
         }
 
         resolveScale(spec_.scale, vDec->width, vDec->height, dstW, dstH);
         if (dstW <= 0 || dstH <= 0) {
-            say(QStringLiteral("✗ 无法从源文件取得有效分辨率"),
+            say(QCoreApplication::translate("lr::TranscodeTask", "✗ 无法从源文件取得有效分辨率"),
                 lr::logcolor::kError);
             goto done;
         }
@@ -540,8 +586,7 @@ bool TranscodeTask::run(TaskSignals &sig) {
         auto tryOpen = [&](const std::string &name, std::string &err) -> int {
             const AVCodec *enc = api.avcodec_find_encoder_by_name(name.c_str());
             if (!enc) return AVERROR_ENCODER_NOT_FOUND;
-            api.avcodec_free_context(&vEnc);
-            vEnc = api.avcodec_alloc_context3(enc);
+            vEnc.reset(api.avcodec_alloc_context3(enc));  // reset 先释放旧的
             if (!vEnc) return AVERROR(ENOMEM);
 
             vEnc->width = dstW;
@@ -565,11 +610,11 @@ bool TranscodeTask::run(TaskSignals &sig) {
                 api.av_opt_set(vEnc->priv_data, "profile", "high", 0);
             }
             // 新版推荐走的 AVOption 通道；失败也不影响（已同时设了 rc_* 字段）
-            api.av_opt_set_int(vEnc, "maxrate", maxrate, 0);
-            api.av_opt_set_int(vEnc, "bufsize", bufsize, 0);
+            api.av_opt_set_int(vEnc.get(), "maxrate", maxrate, 0);
+            api.av_opt_set_int(vEnc.get(), "bufsize", bufsize, 0);
 
             AVDictionary *opts = nullptr;
-            const int r = api.avcodec_open2(vEnc, enc, &opts);
+            const int r = api.avcodec_open2(vEnc.get(), enc, &opts);
             api.av_dict_free(&opts);
             if (r < 0) err = api.errorText(r);
             return r;
@@ -580,35 +625,35 @@ bool TranscodeTask::run(TaskSignals &sig) {
         if (ret < 0) {
             const QString first = QString::fromStdString(err);
             if (!spec_.fallbackToX264 || spec_.videoEncoder == "libx264") {
-                say(QStringLiteral("✗ 无法打开视频编码器 %1：%2")
+                say(QCoreApplication::translate("lr::TranscodeTask", "✗ 无法打开视频编码器 %1：%2")
                         .arg(QString::fromStdString(spec_.videoEncoder), first),
                     lr::logcolor::kError);
                 goto done;
             }
-            say(QStringLiteral("⚠ 编码器 %1 不可用（%2），自动回退 libx264。")
+            say(QCoreApplication::translate("lr::TranscodeTask", "⚠ 编码器 %1 不可用（%2），自动回退 libx264。")
                     .arg(QString::fromStdString(spec_.videoEncoder), first),
                 lr::logcolor::kWarn);
             err.clear();
             ret = tryOpen("libx264", err);
             if (ret < 0) {
-                say(QStringLiteral("✗ 回退到 libx264 也失败了：%1")
+                say(QCoreApplication::translate("lr::TranscodeTask", "✗ 回退到 libx264 也失败了：%1")
                         .arg(QString::fromStdString(err)),
                     lr::logcolor::kError);
                 goto done;
             }
         }
 
-        vOut = api.avformat_new_stream(oc, nullptr);
+        vOut = api.avformat_new_stream(oc.get(), nullptr);
         if (!vOut) {
-            say(QStringLiteral("✗ 无法创建视频输出流"), lr::logcolor::kError);
+            say(QCoreApplication::translate("lr::TranscodeTask", "✗ 无法创建视频输出流"), lr::logcolor::kError);
             goto done;
         }
-        if (api.avcodec_parameters_from_context(vOut->codecpar, vEnc) < 0) {
-            say(QStringLiteral("✗ 无法回填视频流参数"), lr::logcolor::kError);
+        if (api.avcodec_parameters_from_context(vOut->codecpar, vEnc.get()) < 0) {
+            say(QCoreApplication::translate("lr::TranscodeTask", "✗ 无法回填视频流参数"), lr::logcolor::kError);
             goto done;
         }
         vOut->time_base = vEnc->time_base;
-        say(QStringLiteral("  视频：%1×%2 → %3×%4，编码器 %5，%6 kbps")
+        say(QCoreApplication::translate("lr::TranscodeTask", "  视频：%1×%2 → %3×%4，编码器 %5，%6 kbps")
                 .arg(vDec->width)
                 .arg(vDec->height)
                 .arg(dstW)
@@ -622,37 +667,41 @@ bool TranscodeTask::run(TaskSignals &sig) {
         AVStream *ain = ic->streams[aIdx];
         const AVCodec *adec = api.avcodec_find_decoder(ain->codecpar->codec_id);
         if (adec) {
-            aDec = api.avcodec_alloc_context3(adec);
+            aDec.reset(api.avcodec_alloc_context3(adec));
             if (aDec &&
-                api.avcodec_parameters_to_context(aDec, ain->codecpar) >= 0 &&
-                api.avcodec_open2(aDec, adec, nullptr) >= 0) {
+                api.avcodec_parameters_to_context(aDec.get(), ain->codecpar) >= 0 &&
+                api.avcodec_open2(aDec.get(), adec, nullptr) >= 0) {
                 resampler = new Resampler(api);
                 std::string err;
                 if (!resampler->init(aDec->ch_layout,
                                      static_cast<AVSampleFormat>(aDec->sample_fmt),
                                      aDec->sample_rate, err)) {
-                    say(QStringLiteral("⚠ 跳过音频轨：%1")
+                    say(QCoreApplication::translate("lr::TranscodeTask", "⚠ 跳过音频轨：%1")
                             .arg(QString::fromStdString(err)),
                         lr::logcolor::kWarn);
                     delete resampler;
                     resampler = nullptr;
                 }
             } else {
-                say(QStringLiteral("⚠ 无法打开音频解码器，输出将无音轨。"),
+                say(QCoreApplication::translate("lr::TranscodeTask", "⚠ 无法打开音频解码器，输出将无音轨。"),
                     lr::logcolor::kWarn);
             }
         } else {
-            say(QStringLiteral("⚠ 找不到音频解码器，输出将无音轨。"),
+            say(QCoreApplication::translate("lr::TranscodeTask", "⚠ 找不到音频解码器，输出将无音轨。"),
                 lr::logcolor::kWarn);
         }
 
         if (resampler) {
             const AVCodec *aenc = api.avcodec_find_encoder_by_name("aac");
             if (!aenc) {
-                say(QStringLiteral("⚠ 这份 FFmpeg 没有 aac 编码器，输出无音轨。"),
+                say(QCoreApplication::translate("lr::TranscodeTask", "⚠ 这份 FFmpeg 没有 aac 编码器，输出无音轨。"),
                     lr::logcolor::kWarn);
             } else {
-                aEnc = api.avcodec_alloc_context3(aenc);
+                aEnc.reset(api.avcodec_alloc_context3(aenc));
+                if (!aEnc) {
+                    say(QCoreApplication::translate("lr::TranscodeTask", "⚠ 无法创建 aac 编码器，输出无音轨。"),
+                        lr::logcolor::kWarn);
+                } else {
                 aEnc->sample_rate = resampler->sampleRate();
                 aEnc->ch_layout = resampler->layout();
                 aEnc->sample_fmt = resampler->format();
@@ -662,25 +711,26 @@ bool TranscodeTask::run(TaskSignals &sig) {
                 if (oc->oformat->flags & AVFMT_GLOBALHEADER) {
                     aEnc->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
                 }
-                if (api.avcodec_open2(aEnc, aenc, nullptr) < 0) {
-                    say(QStringLiteral("⚠ 无法打开 aac 编码器，输出无音轨。"),
+                if (api.avcodec_open2(aEnc.get(), aenc, nullptr) < 0) {
+                    say(QCoreApplication::translate("lr::TranscodeTask", "⚠ 无法打开 aac 编码器，输出无音轨。"),
                         lr::logcolor::kWarn);
-                    api.avcodec_free_context(&aEnc);
+                    aEnc.reset();
                 } else {
                     audioFrameSize = aEnc->frame_size > 0 ? aEnc->frame_size : 1024;
-                    aOut = api.avformat_new_stream(oc, nullptr);
+                    aOut = api.avformat_new_stream(oc.get(), nullptr);
                     if (!aOut ||
-                        api.avcodec_parameters_from_context(aOut->codecpar, aEnc) < 0) {
-                        say(QStringLiteral("⚠ 无法创建音频输出流，输出无音轨。"),
+                        api.avcodec_parameters_from_context(aOut->codecpar, aEnc.get()) < 0) {
+                        say(QCoreApplication::translate("lr::TranscodeTask", "⚠ 无法创建音频输出流，输出无音轨。"),
                             lr::logcolor::kWarn);
-                        api.avcodec_free_context(&aEnc);
+                        aEnc.reset();
                     } else {
                         aOut->time_base = aEnc->time_base;
-                        say(QStringLiteral("  音频：%1 Hz · %2 声道 · %3 kbps")
+                        say(QCoreApplication::translate("lr::TranscodeTask", "  音频：%1 Hz · %2 声道 · %3 kbps")
                                 .arg(aEnc->sample_rate)
                                 .arg(resampler->channels())
                                 .arg(spec_.audioKbps));
                     }
+                }
                 }
             }
             if (!aEnc) {
@@ -693,10 +743,17 @@ bool TranscodeTask::run(TaskSignals &sig) {
     // ---------- 6. 写封装头部 ----------
     scaler = new Scaler(api, AV_PIX_FMT_YUV420P);
 
-    if (!(oc->oformat->flags & AVFMT_NOFILE)) {
-        ret = api.avio_open(&oc->pb, spec_.output.c_str(), AVIO_FLAG_WRITE);
+    if (oc->oformat->flags & AVFMT_NOFILE) {
+        tempPath.clear();  // 不落盘的封装器（如直接推流）：谈不上"原子落盘"
+    } else {
+        // 原子落盘（P2-9 的核心）：容器按临时路径建好、数据也写到那里，
+        // 一切成功并关闭句柄后才 rename 到最终路径 —— 崩溃/断电最多留下
+        // 一个 .LRConvert-tmp，最终路径要么完整、要么不存在。
+        std::error_code rmEc;
+        std::filesystem::remove(tempPath, rmEc);  // 上次异常退出留下的残骸
+        ret = api.avio_open(&oc->pb, tempPath.c_str(), AVIO_FLAG_WRITE);
         if (ret < 0) {
-            say(QStringLiteral("✗ 无法写入输出文件：%1").arg(api.errorText(ret)),
+            say(QCoreApplication::translate("lr::TranscodeTask", "✗ 无法写入输出文件：%1").arg(api.errorText(ret)),
                 lr::logcolor::kError);
             goto done;
         }
@@ -706,10 +763,10 @@ bool TranscodeTask::run(TaskSignals &sig) {
         for (const auto &kv : spec_.muxerOptions) {
             api.av_dict_set(&opts, kv.first.c_str(), kv.second.c_str(), 0);
         }
-        ret = api.avformat_write_header(oc, &opts);
+        ret = api.avformat_write_header(oc.get(), &opts);
         api.av_dict_free(&opts);
         if (ret < 0) {
-            say(QStringLiteral("✗ 写封装头部失败：%1").arg(api.errorText(ret)),
+            say(QCoreApplication::translate("lr::TranscodeTask", "✗ 写封装头部失败：%1").arg(api.errorText(ret)),
                 lr::logcolor::kError);
             goto done;
         }
@@ -719,53 +776,57 @@ bool TranscodeTask::run(TaskSignals &sig) {
     {
         Throttle th;
         while (!cancel_.load()) {
-            ret = api.av_read_frame(ic, pkt);
+            // 读包刹车（P0-4）：本地文件不走协议轮询；网络协议下 30 秒
+            // 无进展就中断，把"永久挂起"变回"正常报错"
+            lr::io::armTimeout(lr::io::kReadTimeoutMs);
+            ret = api.av_read_frame(ic.get(), pkt.get());
+            lr::io::disarmTimeout();
             if (ret < 0) {
                 inputEof = true;
                 break;
             }
             if (pkt->stream_index == vIdx) {
-                const int s = api.avcodec_send_packet(vDec, pkt);
+                const int s = api.avcodec_send_packet(vDec.get(), pkt.get());
                 if (s < 0 && s != AVERROR(EAGAIN)) {
                     stopReason = "视频解码器不接受数据";
-                    api.av_packet_unref(pkt);
+                    api.av_packet_unref(pkt.get());
                     break;
                 }
                 if (!drainVideo()) break;
             } else if (pkt->stream_index == aIdx && resampler) {
-                const int s = api.avcodec_send_packet(aDec, pkt);
+                const int s = api.avcodec_send_packet(aDec.get(), pkt.get());
                 if (s < 0 && s != AVERROR(EAGAIN)) {
                     stopReason = "音频解码器不接受数据";
-                    api.av_packet_unref(pkt);
+                    api.av_packet_unref(pkt.get());
                     break;
                 }
                 if (!drainAudio()) break;
             }
-            api.av_packet_unref(pkt);
+            api.av_packet_unref(pkt.get());
 
             if (totalUs > 0) {
                 const int permille = static_cast<int>(doneUs * 1000 / totalUs);
                 if (th.ready(permille)) {
                     emit sig.progress(permille / 10,
-                                      QStringLiteral("已处理 %1 / %2 秒")
+                                      QCoreApplication::translate("lr::TranscodeTask", "已处理 %1 / %2 秒")
                                           .arg(doneUs / kUsRate)
                                           .arg(totalUs / kUsRate));
                 }
             } else {
-                emit sig.progress(-1, QStringLiteral("正在编码…"));
+                emit sig.progress(-1, QCoreApplication::translate("lr::TranscodeTask", "正在编码…"));
             }
         }
-        if (pkt) api.av_packet_unref(pkt);
+        if (pkt) api.av_packet_unref(pkt.get());
     }
 
     // ---------- 8. 收尾：冲刷解码器 / 重采样器 / 编码器 ----------
     // 即使被"停止"也要走完这一步 —— 对应原来"先发 q 让 ffmpeg 自己收尾"，
     // 保证输出文件头部/索引完整、可以直接播放。
     if (inputEof) {
-        api.avcodec_send_packet(vDec, nullptr);
+        api.avcodec_send_packet(vDec.get(), nullptr);
         drainVideo();
         if (resampler) {
-            api.avcodec_send_packet(aDec, nullptr);
+            api.avcodec_send_packet(aDec.get(), nullptr);
             drainAudio();
             std::string err;
             if (resampler->flush(err)) {
@@ -781,53 +842,78 @@ bool TranscodeTask::run(TaskSignals &sig) {
                         aOutSamples, FfRational{1, resampler->sampleRate()},
                         rat(aEnc->time_base));
                     aOutSamples += n;
-                    if (api.avcodec_send_frame(aEnc, af) < 0 || !pumpAudio()) break;
+                    if (api.avcodec_send_frame(aEnc.get(), af) < 0 || !pumpAudio()) break;
                     resampler->consume(n);
                 }
             }
         }
     }
-    api.avcodec_send_frame(vEnc, nullptr);
+    api.avcodec_send_frame(vEnc.get(), nullptr);
     pumpVideo();
     if (aEnc) {
-        api.avcodec_send_frame(aEnc, nullptr);
+        api.avcodec_send_frame(aEnc.get(), nullptr);
         pumpAudio();
     }
-    if (api.av_write_trailer(oc) < 0 && stopReason.empty()) {
+    if (api.av_write_trailer(oc.get()) < 0 && stopReason.empty()) {
         stopReason = "写封装尾部失败";
     }
 
     if (cancel_.load()) {
-        say(QStringLiteral("■ 已手动停止，输出文件已保留到这里为止的内容。"),
+        // 被手动停止：已经写进去的那部分仍然是可播放的完整文件（trailer 已写），
+        // 按原行为保留 —— 所以这里也算"晋升"（下面 done: 里 rename）。
+        keepOutput = true;
+        say(QCoreApplication::translate("lr::TranscodeTask", "■ 已手动停止，输出文件已保留到这里为止的内容。"),
             lr::logcolor::kWarn);
     } else if (!stopReason.empty()) {
-        say(QStringLiteral("✗ 编码中断：%1").arg(QString::fromStdString(stopReason)),
+        say(QCoreApplication::translate("lr::TranscodeTask", "✗ 编码中断：%1").arg(QString::fromStdString(stopReason)),
             lr::logcolor::kError);
     } else {
-        emit sig.progress(1000 / 10, QStringLiteral("编码完成"));
-        say(QStringLiteral("✓ 编码完成：%1").arg(QString::fromStdString(spec_.output)),
+        emit sig.progress(1000 / 10, QCoreApplication::translate("lr::TranscodeTask", "编码完成"));
+        say(QCoreApplication::translate("lr::TranscodeTask", "✓ 编码完成：%1").arg(QString::fromStdString(spec_.output)),
             lr::logcolor::kOk);
         ok = true;
+        keepOutput = true;
+    }
+
+    } catch (const std::exception &e) {
+        // P2-9：任务线程同样是 std::thread 语义，异常逃出即 std::terminate，
+        // 整个进程秒死。这里收敛成"该任务失败"，批处理继续/中止由上层决定。
+        // （RAII 保证上面的 libav* 对象在异常路径上一样被释放。）
+        say(QCoreApplication::translate("lr::TranscodeTask", "✗ 编码过程发生异常：%1")
+                .arg(QString::fromUtf8(e.what())),
+            lr::logcolor::kError);
+    } catch (...) {
+        say(QCoreApplication::translate("lr::TranscodeTask", "✗ 编码过程发生未知异常"),
+            lr::logcolor::kError);
     }
 
 done:
-    if (pkt) api.av_packet_free(&pkt);
-    if (outPkt) api.av_packet_free(&outPkt);
-    if (frame) api.av_frame_free(&frame);
+    // 输出容器：先关文件句柄（不关的话 rename 时数据可能还在缓冲里），
+    // 再按成败决定"晋升"还是"删掉"。上下文本身由 RAII 在此之后释放。
+    if (oc && !tempPath.empty()) {
+        lr::closeFormatFile(oc.get(), &api);
+        std::error_code ec;
+        if (keepOutput) {
+            std::filesystem::rename(tempPath, spec_.output, ec);
+            if (ec) {
+                say(QCoreApplication::translate("lr::TranscodeTask", "✗ 输出已写完但未能就位（%1）：%2")
+                        .arg(QString::fromStdString(spec_.output),
+                             QString::fromLocal8Bit(ec.message())),
+                    lr::logcolor::kError);
+                ok = false;
+                std::filesystem::remove(tempPath, ec);
+            }
+        } else {
+            // 失败：最终路径保持原状（上一版会把半个坏文件写在这里），
+            // 临时文件清掉 —— 宁可没有输出，也不给一个打不开的文件。
+            std::filesystem::remove(tempPath, ec);
+        }
+    }
     delete scaler;
     delete resampler;
-    api.avcodec_free_context(&vDec);
-    api.avcodec_free_context(&vEnc);
-    api.avcodec_free_context(&aDec);
-    api.avcodec_free_context(&aEnc);
-    if (oc) {
-        if (!(oc->oformat->flags & AVFMT_NOFILE) && oc->pb) {
-            api.avio_closep(&oc->pb);
-        }
-        api.avformat_free_context(oc);
-    }
-    if (ic) api.avformat_close_input(&ic);
     return ok;
+    // pkt / outPkt / frame / vDec / vEnc / aDec / aEnc / oc / ic 在 return
+    // 之后随 RAII 析构（P2-11）
 }
 
 }  // namespace lr

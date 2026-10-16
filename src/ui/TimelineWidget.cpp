@@ -3,6 +3,7 @@
 
 #include "ui/TimelineWidget.h"
 
+#include <QCoreApplication>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPalette>
@@ -245,7 +246,8 @@ void TimelineWidget::paintEvent(QPaintEvent *) {
 
     if (!hasMedia_) {
         p.setPen(palette().color(QPalette::Disabled, QPalette::Text));
-        p.drawText(rect(), Qt::AlignCenter, QStringLiteral("导入视频后显示时间轴"));
+        // 绘制时现场 tr()：切语言后重绘（update()）即跟上，不需要另存字符串
+        p.drawText(rect(), Qt::AlignCenter, QCoreApplication::translate("lr::ui::TimelineWidget", "导入视频后显示时间轴"));
         return;
     }
 
@@ -324,7 +326,7 @@ void TimelineWidget::drawWaveform(QPainter &p, const Layout &l) {
         p.drawLine(0, midY, width(), midY);
         p.setPen(palette().color(QPalette::Disabled, QPalette::Text));
         p.drawText(QRect(0, l.waveTop, width(), l.waveH), Qt::AlignCenter,
-                   hasAudio_ ? QStringLiteral("波形计算中…") : QStringLiteral("无音轨"));
+                   hasAudio_ ? QCoreApplication::translate("lr::ui::TimelineWidget", "波形计算中…") : QCoreApplication::translate("lr::ui::TimelineWidget", "无音轨"));
         return;
     }
 

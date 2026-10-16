@@ -983,10 +983,17 @@ QPushButton:disabled{background:#E0E0E0;color:#9E9E9E;border:1px solid #BDBDBD;}
        <item>
         <widget class="QTextBrowser" name="T7about"/>
        </item>
-       <item>
-        <layout class="QVBoxLayout" name="verticalLayout_7">
-         <item>
-          <spacer name="verticalSpacer_7">
+      <item>
+       <layout class="QVBoxLayout" name="verticalLayout_7">
+        <item>
+         <widget class="QComboBox" name="T7lang">
+          <property name="toolTip">
+           <string>界面语言（切换后立即生效，重启后记住选择）</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <spacer name="verticalSpacer_7">
            <property name="orientation">
             <enum>Qt::Vertical</enum>
            </property>

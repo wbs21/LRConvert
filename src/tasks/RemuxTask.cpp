@@ -3,8 +3,11 @@
 
 #include "RemuxTask.h"
 
+#include "core/PathUtil.h"
 #include "core/TimeUtil.h"
+#include "ffmpeg/FfObjects.h"
 #include "ffmpeg/FfmpegApi.h"
+#include "ffmpeg/IoTimeout.h"
 
 extern "C" {
 #include <libavcodec/avcodec.h>
@@ -14,12 +17,16 @@ extern "C" {
 #include <libavutil/rational.h>
 }
 
+#include <QCoreApplication>
 #include <QDateTime>
 #include <QString>
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <filesystem>
+#include <string>
+#include <utility>
+#include <vector>
 
 namespace lr {
 namespace {
@@ -28,10 +35,10 @@ constexpr int kUsRate = 1000000;
 
 /// 一个输入文件及其「输入流 → 输出流」的映射
 struct InCtx {
-    AVFormatContext *ic = nullptr;
-    std::vector<int> map;   ///< 下标 = 输入流序号，值 = 输出流序号（-1 跳过）
-    int64_t offsetUs = 0;   ///< 叠加到本输入所有包上的时间偏移（微秒）
-    int64_t endUs = 0;      ///< 本输入的结束时间（微秒，= 最后一个包的 pts+duration）
+    lr::FfInput ic;             ///< RAII：随结构体析构自动关闭（P2-11）
+    std::vector<int> map;       ///< 下标 = 输入流序号，值 = 输出流序号（-1 跳过）
+    int64_t offsetUs = 0;       ///< 叠加到本输入所有包上的时间偏移（微秒）
+    int64_t endUs = 0;          ///< 本输入的结束时间（微秒，= 最后一个包的 pts+duration）
     bool eof = false;
 };
 
@@ -86,9 +93,41 @@ QString RemuxTask::title() const {
 }
 
 bool RemuxTask::run(TaskSignals &sig) {
+    std::string tempPath;
+
+    auto logError = [&sig](const QString &text) {
+        emit sig.log(text, logcolor::kError);
+    };
+
+    try {
+        const bool ok = runInner(sig, tempPath);
+
+        // 收尾统一在这里做：runInner 成功/已晋升时会把 tempPath 清掉，
+        // 这里还剩东西就说明没写完 —— 别留残骸。
+        // 要是 runInner 抛了异常，这里的 return 不会执行，清理落到 catch 里。
+        if (!tempPath.empty()) {
+            std::error_code ec;
+            std::filesystem::remove(tempPath, ec);
+        }
+        return ok;
+    } catch (const std::exception &e) {
+        // P2-9：任务线程是 std::thread 语义，异常飞出去就是 std::terminate，
+        // 整个进程当场消失、dump 都未必写得出来。这里收敛成"这条任务失败"。
+        logError(QCoreApplication::translate("lr::RemuxTask", "✗ 处理过程发生异常：%1")
+                     .arg(QString::fromUtf8(e.what())));
+    } catch (...) {
+        logError(QCoreApplication::translate("lr::RemuxTask", "✗ 处理过程发生未知异常。"));
+    }
+
+    std::error_code ec;
+    std::filesystem::remove(tempPath, ec);
+    return false;
+}
+
+bool RemuxTask::runInner(TaskSignals &sig, std::string &tempPath) {
     auto &api = FfmpegApi::instance();
     if (!api.isLoaded()) {
-        emit sig.log(QStringLiteral("✗ FFmpeg 动态库尚未加载完成，请稍候再试。"),
+        emit sig.log(QCoreApplication::translate("lr::RemuxTask", "✗ FFmpeg 动态库尚未加载完成，请稍候再试。"),
                      logcolor::kError);
         return false;
     }
@@ -98,56 +137,56 @@ bool RemuxTask::run(TaskSignals &sig) {
         emit sig.log(text, color);
     };
 
-    auto closeInputs = [&api](std::vector<InCtx> &ctxs) {
-        for (auto &in : ctxs) {
-            if (in.ic) api.avformat_close_input(&in.ic);
+    // ---------------- 0. 输出不能是任何一个输入 ----------------
+    // 原来oncely往目标路径直写，输错了就是"源文件被半个坏文件盖掉"。
+    // 现在虽然改成临时文件 + rename（P2-9），rename 的目标仍会被输入句柄
+    // 占着而失败，所以还是要在开跑前拦下来。
+    for (const auto &in : spec_.inputs) {
+        if (pathutil::sameFilePath(in, spec_.output)) {
+            log(QCoreApplication::translate("lr::RemuxTask", "✗ 输出文件不能与输入文件相同：%1")
+                    .arg(QString::fromStdString(in)),
+                logcolor::kError);
+            return false;
         }
-    };
-    auto discardOutput = [&api](AVFormatContext *ctx) {
-        if (ctx) {
-            if (!(ctx->oformat->flags & AVFMT_NOFILE) && ctx->pb) {
-                api.avio_closep(&ctx->pb);
-            }
-            api.avformat_free_context(ctx);
-        }
-    };
+    }
 
     // ---------------- 1. 打开输入 ----------------
+    // InCtx 里的 ic 是 RAII 的：下面任何一处提前 return 都不用再手工清理，
+    // vector<InCtx> 出作用域时全部关闭（以前是每段错误都配一次 closeInputs）。
     std::vector<InCtx> ins(spec_.inputs.size());
     for (size_t i = 0; i < spec_.inputs.size(); ++i) {
-        AVFormatContext *ic = nullptr;
-        int ret = api.avformat_open_input(&ic, spec_.inputs[i].c_str(), nullptr,
-                                          nullptr);
+        // 统一入口：带 I/O 超时（P0-4）。网络盘不在线时快速失败而不是挂住
+        std::string openError;
+        AVFormatContext *raw =
+            io::openInputWithTimeout(api, spec_.inputs[i], io::kOpenTimeoutSec, openError);
+        if (raw == nullptr) {
+            log(QCoreApplication::translate("lr::RemuxTask", "✗ 无法打开输入文件：%1\n   %2")
+                    .arg(QString::fromStdString(spec_.inputs[i]),
+                         QString::fromStdString(openError)),
+                logcolor::kError);
+            return false;
+        }
+        ins[i].ic = wrapInput(api, raw);
+
+        const int ret = api.avformat_find_stream_info(ins[i].ic.get(), nullptr);
         if (ret < 0) {
-            log(QStringLiteral("✗ 无法打开输入文件：%1\n   %2")
+            log(QCoreApplication::translate("lr::RemuxTask", "✗ 无法读取媒体信息：%1\n   %2")
                     .arg(QString::fromStdString(spec_.inputs[i]),
                          QString::fromStdString(api.errorText(ret))),
                 logcolor::kError);
-            closeInputs(ins);
             return false;
         }
-        ret = api.avformat_find_stream_info(ic, nullptr);
-        if (ret < 0) {
-            log(QStringLiteral("✗ 无法读取媒体信息：%1\n   %2")
-                    .arg(QString::fromStdString(spec_.inputs[i]),
-                         QString::fromStdString(api.errorText(ret))),
-                logcolor::kError);
-            api.avformat_close_input(&ic);
-            closeInputs(ins);
-            return false;
-        }
-        ins[i].ic = ic;
-        ins[i].map.assign(ic->nb_streams, -1);
+        ins[i].map.assign(ins[i].ic->nb_streams, -1);
     }
 
     // ---------------- 2. 截取：先 seek 到起点 ----------------
     int64_t startUs = 0;
     if (spec_.startSec > 0 && !ins.empty()) {
         startUs = timeutil::toAvTime(spec_.startSec);
-        const int ret = api.avformat_seek_file(ins[0].ic, -1, INT64_MIN, startUs,
+        const int ret = api.avformat_seek_file(ins[0].ic.get(), -1, INT64_MIN, startUs,
                                                startUs, AVSEEK_FLAG_BACKWARD);
         if (ret < 0) {
-            log(QStringLiteral("⚠ 无法定位到 %1，将从文件开头开始（%2）")
+            log(QCoreApplication::translate("lr::RemuxTask", "⚠ 无法定位到 %1，将从文件开头开始（%2）")
                     .arg(QString::fromStdString(
                              timeutil::formatTimestamp(spec_.startSec)),
                          QString::fromStdString(api.errorText(ret))),
@@ -157,19 +196,23 @@ bool RemuxTask::run(TaskSignals &sig) {
     }
 
     // ---------------- 3. 建立输出 ----------------
-    AVFormatContext *oc = nullptr;
-    int ret = api.avformat_alloc_output_context2(&oc, nullptr, nullptr,
-                                                 spec_.output.c_str());
-    if (ret < 0 || oc == nullptr) {
-        log(QStringLiteral("✗ 无法创建输出文件（后缀名可能不被支持）：%1")
+    // muxer 按**最终路径**的后缀选择；实际写入位置换成临时文件（见 avio_open）
+    // 同 Writer 那边：容器按**临时路径**建（后缀一致，见 pathutil::atomicTempPath），
+    // 这样 movflags +faststart 在写尾时 reopen 的是这个临时文件。
+    tempPath = pathutil::atomicTempPath(spec_.output);
+    AVFormatContext *rawOc = nullptr;
+    int ret = api.avformat_alloc_output_context2(&rawOc, nullptr, nullptr,
+                                                 tempPath.c_str());
+    lr::FfOutput oc = wrapOutput(api, rawOc);
+    if (!oc) {
+        log(QCoreApplication::translate("lr::RemuxTask", "✗ 无法创建输出文件（后缀名可能不被支持）：%1")
                 .arg(QString::fromStdString(spec_.output)),
             logcolor::kError);
-        closeInputs(ins);
         return false;
     }
 
     auto addOutputStream = [&](AVStream *src) -> int {
-        AVStream *os = api.avformat_new_stream(oc, nullptr);
+        AVStream *os = api.avformat_new_stream(oc.get(), nullptr);
         if (!os) return -1;
         if (api.avcodec_parameters_copy(os->codecpar, src->codecpar) < 0) {
             return -1;
@@ -182,10 +225,8 @@ bool RemuxTask::run(TaskSignals &sig) {
     if (spec_.kind == RemuxSpec::Kind::Merge) {
         // 原命令：-map 0:v:0 -map 1:a:0 -c copy -shortest
         if (ins.size() < 2) {
-            log(QStringLiteral("✗ 合并需要两个输入（视频 + 音频）。"),
+            log(QCoreApplication::translate("lr::RemuxTask", "✗ 合并需要两个输入（视频 + 音频）。"),
                 logcolor::kError);
-            discardOutput(oc);
-            closeInputs(ins);
             return false;
         }
         int videoIdx = -1;
@@ -205,18 +246,14 @@ bool RemuxTask::run(TaskSignals &sig) {
             }
         }
         if (videoIdx < 0 || audioIdx < 0) {
-            log(QStringLiteral("✗ 合并失败：视频文件里没有视频轨，或音频文件里没有音频轨。"),
+            log(QCoreApplication::translate("lr::RemuxTask", "✗ 合并失败：视频文件里没有视频轨，或音频文件里没有音频轨。"),
                 logcolor::kError);
-            discardOutput(oc);
-            closeInputs(ins);
             return false;
         }
         const int v = addOutputStream(ins[0].ic->streams[videoIdx]);
         const int a = addOutputStream(ins[1].ic->streams[audioIdx]);
         if (v < 0 || a < 0) {
-            log(QStringLiteral("✗ 无法创建输出流。"), logcolor::kError);
-            discardOutput(oc);
-            closeInputs(ins);
+            log(QCoreApplication::translate("lr::RemuxTask", "✗ 无法创建输出流。"), logcolor::kError);
             return false;
         }
         ins[0].map[videoIdx] = v;
@@ -231,9 +268,7 @@ bool RemuxTask::run(TaskSignals &sig) {
                 if (i == 0) {
                     const int out = addOutputStream(src);
                     if (out < 0) {
-                        log(QStringLiteral("✗ 无法创建输出流。"), logcolor::kError);
-                        discardOutput(oc);
-                        closeInputs(ins);
+                        log(QCoreApplication::translate("lr::RemuxTask", "✗ 无法创建输出流。"), logcolor::kError);
                         return false;
                     }
                     ins[i].map[j] = out;
@@ -245,7 +280,7 @@ bool RemuxTask::run(TaskSignals &sig) {
                             ins[0].ic->streams[j]->codecpar->codec_type) {
                         ins[i].map[j] = ins[0].map[j];
                     } else {
-                        log(QStringLiteral("⚠ 第 %1 个文件的第 %2 条轨道与第一个文件"
+                        log(QCoreApplication::translate("lr::RemuxTask", "⚠ 第 %1 个文件的第 %2 条轨道与第一个文件"
                                            "不匹配，已跳过。")
                                 .arg(i + 1)
                                 .arg(j),
@@ -257,21 +292,25 @@ bool RemuxTask::run(TaskSignals &sig) {
     }
 
     if (oc->nb_streams == 0) {
-        log(QStringLiteral("✗ 没有找到任何可复制的轨道，已放弃。"), logcolor::kError);
-        discardOutput(oc);
-        closeInputs(ins);
+        log(QCoreApplication::translate("lr::RemuxTask", "✗ 没有找到任何可复制的轨道，已放弃。"), logcolor::kError);
         return false;
     }
 
-    if (!(oc->oformat->flags & AVFMT_NOFILE)) {
-        ret = api.avio_open(&oc->pb, spec_.output.c_str(), AVIO_FLAG_WRITE);
+    if (oc->oformat->flags & AVFMT_NOFILE) {
+        tempPath.clear();  // 不落盘的封装器（如直接推流）：没有"原子落盘"这一说
+    } else {
+        // 原子落盘（P2-9）：写临时文件，成功并关闭句柄后才 rename 到最终路径。
+        // 中途崩溃/断电最多留下一个临时文件，最终路径要么完整、要么不存在 ——
+        // 不会出现半个坏文件盖掉旧文件的情况。
+        std::error_code rmEc;
+        std::filesystem::remove(tempPath, rmEc);  // 上次异常退出留下的残骸
+        ret = api.avio_open(&oc->pb, tempPath.c_str(), AVIO_FLAG_WRITE);
         if (ret < 0) {
-            log(QStringLiteral("✗ 无法写入输出文件（路径不存在或没有权限）：%1\n   %2")
+            log(QCoreApplication::translate("lr::RemuxTask", "✗ 无法写入输出文件（路径不存在或没有权限）：%1\n   %2")
                     .arg(QString::fromStdString(spec_.output),
                          QString::fromStdString(api.errorText(ret))),
                 logcolor::kError);
-            discardOutput(oc);
-            closeInputs(ins);
+            tempPath.clear();
             return false;
         }
     }
@@ -287,21 +326,17 @@ bool RemuxTask::run(TaskSignals &sig) {
     // 输出时长会比源文件多出一个音频帧。
     if (spec_.startSec > 0) oc->avoid_negative_ts = 1;
 
-    ret = api.avformat_write_header(oc, &opts);
+    ret = api.avformat_write_header(oc.get(), &opts);
     api.av_dict_free(&opts);
     if (ret < 0) {
-        log(QStringLiteral("✗ 无法写入文件头：%1")
+        log(QCoreApplication::translate("lr::RemuxTask", "✗ 无法写入文件头：%1")
                 .arg(QString::fromStdString(api.errorText(ret))),
             logcolor::kError);
-        discardOutput(oc);
-        closeInputs(ins);
-        std::error_code ec;
-        std::filesystem::remove(spec_.output, ec);
         return false;
     }
 
     // ---------------- 4. 拷贝数据包 ----------------
-    log(QStringLiteral("▶ 开始处理：%1").arg(title()), logcolor::kStep);
+    log(QCoreApplication::translate("lr::RemuxTask", "▶ 开始处理：%1").arg(title()), logcolor::kStep);
 
     int64_t totalUs = 0;
     if (spec_.kind == RemuxSpec::Kind::Concat) {
@@ -322,16 +357,23 @@ bool RemuxTask::run(TaskSignals &sig) {
     const QString totalText = QString::fromStdString(
         timeutil::formatTimestamp(timeutil::fromAvTime(totalUs)));
 
-    AVPacket *pkt = api.av_packet_alloc();
+    lr::FfPacket pkt = wrapPacket(api, api.av_packet_alloc());
+    if (!pkt) {
+        log(QCoreApplication::translate("lr::RemuxTask", "✗ 分配数据包失败。"), logcolor::kError);
+        return false;
+    }
     Throttle throttle;
     bool ok = true;
 
     /// 读一个包并写出；返回 false 表示这个输入已经结束（或出错）
     auto readAndWrite = [&](InCtx &in, AVPacket *p) -> bool {
-        const int rret = api.av_read_frame(in.ic, p);
+        // 读包刹车（P0-4）：网络协议下 30 秒无进展就中断，返回错误而不是挂住
+        io::armTimeout(io::kReadTimeoutMs);
+        const int rret = api.av_read_frame(in.ic.get(), p);
+        io::disarmTimeout();
         if (rret < 0) {
             if (rret != AVERROR_EOF) {
-                log(QStringLiteral("✗ 读取数据失败：%1")
+                log(QCoreApplication::translate("lr::RemuxTask", "✗ 读取数据失败：%1")
                         .arg(QString::fromStdString(api.errorText(rret))),
                     logcolor::kError);
                 ok = false;
@@ -380,7 +422,7 @@ bool RemuxTask::run(TaskSignals &sig) {
             if (throttle.ready(permille)) {
                 emit sig.progress(
                     totalUs > 0 ? static_cast<int>(done * 100 / totalUs) : -1,
-                    QStringLiteral("%1 · %2 / %3")
+                    QCoreApplication::translate("lr::RemuxTask", "%1 · %2 / %3")
                         .arg(title(),
                              QString::fromStdString(timeutil::formatTimestamp(
                                  timeutil::fromAvTime(done))),
@@ -397,10 +439,10 @@ bool RemuxTask::run(TaskSignals &sig) {
         }
         p->stream_index = in.map[srcIdx];
 
-        const int wret = api.av_interleaved_write_frame(oc, p);
+        const int wret = api.av_interleaved_write_frame(oc.get(), p);
         api.av_packet_unref(p);
         if (wret < 0) {
-            log(QStringLiteral("✗ 写入数据失败：%1")
+            log(QCoreApplication::translate("lr::RemuxTask", "✗ 写入数据失败：%1")
                     .arg(QString::fromStdString(api.errorText(wret))),
                 logcolor::kError);
             ok = false;
@@ -418,7 +460,7 @@ bool RemuxTask::run(TaskSignals &sig) {
     while (ok && !cancel_.load()) {
         if (sequential) {
             InCtx &in = ins[cur];
-            if (readAndWrite(in, pkt)) continue;
+            if (readAndWrite(in, pkt.get())) continue;
             if (!ok) break;
             in.eof = true;
             accUs += in.endUs;
@@ -433,7 +475,7 @@ bool RemuxTask::run(TaskSignals &sig) {
                     anyEof = true;
                     continue;
                 }
-                if (readAndWrite(in, pkt)) {
+                if (readAndWrite(in, pkt.get())) {
                     ++produced;
                 } else {
                     if (!ok) break;
@@ -446,37 +488,47 @@ bool RemuxTask::run(TaskSignals &sig) {
         }
     }
 
-    api.av_packet_free(&pkt);
-
     // ---------------- 5. 收尾 ----------------
     // 即使被取消也要写 trailer：这样输出文件仍然是可正常播放的完整文件，
     // 对应 Python 版「先发 q 让 ffmpeg 正常收尾」的行为。
     const bool cancelled = cancel_.load();
-    ret = api.av_write_trailer(oc);
+    ret = api.av_write_trailer(oc.get());
     if (ret < 0) {
-        log(QStringLiteral("✗ 写入文件尾失败：%1")
+        log(QCoreApplication::translate("lr::RemuxTask", "✗ 写入文件尾失败：%1")
                 .arg(QString::fromStdString(api.errorText(ret))),
             logcolor::kError);
         ok = false;
     }
 
-    discardOutput(oc);
-    closeInputs(ins);
+    // 先关文件句柄：不关的话数据可能还在缓冲里，rename 过去就是个残缺文件。
+    // 上下文此后由 RAII 释放。
+    closeFormatFile(oc.get(), &api);
 
-    if (!ok) {
+    // 到这里为止输出已经写完、关闭：现在才"晋升"为最终文件。
+    // 失败的文件不晋升 —— 临时文件由 run() 清掉，最终路径保持原样。
+    if (!tempPath.empty()) {
         std::error_code ec;
-        std::filesystem::remove(spec_.output, ec);
-        return false;
+        std::filesystem::rename(tempPath, spec_.output, ec);
+        if (ec) {
+            log(QCoreApplication::translate("lr::RemuxTask", "✗ 输出已写完但未能就位（%1）：%2")
+                    .arg(QString::fromStdString(spec_.output),
+                         QString::fromLocal8Bit(ec.message())),
+                logcolor::kError);
+            return false;
+        }
+        tempPath.clear();  // 已经是最终文件了，别让外层再删一遍
     }
+
+    if (!ok) return false;
     if (cancelled) {
-        log(QStringLiteral("■ 已停止（输出已正常收尾，可直接播放）：%1")
+        log(QCoreApplication::translate("lr::RemuxTask", "■ 已停止（输出已正常收尾，可直接播放）：%1")
                 .arg(title()),
             logcolor::kWarn);
         return false;
     }
 
-    emit sig.progress(100, QStringLiteral("%1 · 完成").arg(title()));
-    log(QStringLiteral("✓ 完成：%1 → %2")
+    emit sig.progress(100, QCoreApplication::translate("lr::RemuxTask", "%1 · 完成").arg(title()));
+    log(QCoreApplication::translate("lr::RemuxTask", "✓ 完成：%1 → %2")
             .arg(title(), QString::fromStdString(spec_.output)),
         logcolor::kOk);
     return true;

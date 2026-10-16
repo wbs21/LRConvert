@@ -26,13 +26,13 @@
 #include <functional>
 #include <memory>
 #include <string>
-#include <thread>
 #include <vector>
 
 #include "audio/AudioOutput.h"
 #include "ffmpeg/AudioDecoder.h"
 #include "ffmpeg/FfmpegApi.h"
 #include "ffmpeg/FrameGrabber.h"
+#include "platform/ThreadUtil.h"
 
 namespace lr {
 
@@ -108,7 +108,8 @@ private:
     AudioDecoder audio_;
     AudioOutput audioOut_;
 
-    std::thread thread_;
+    /// 播放线程：大栈（P2-12）+ 名字（P1-6）。接口与 std::thread 最小一致
+    lr::platform::BigStackThread thread_;
     std::atomic<bool> stopFlag_{false};
     std::atomic<bool> playing_{false};
     std::atomic<double> pos_{0.0};
